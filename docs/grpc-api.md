@@ -18,7 +18,7 @@ Every RPC in all six services is available over both transports:
 
 The server reads browser origins from `GrpcWeb:AllowedOrigins` and exposes the gRPC status/error headers required by the client. Its defaults allow `http://localhost:5094` and `https://localhost:7229`, matching the Web launch profiles. A different static host origin must be added explicitly. CORS is enforced by browsers and is not an authentication or authorization boundary; the current server implements neither and must not be exposed to untrusted networks.
 
-The repository has two operator clients with the complete 27-RPC surface:
+The repository has two operator clients with the complete 29-RPC surface:
 
 - `NativeDCB.Cli` maps one command to every RPC and uses native gRPC. See [CLI](cli.md).
 - `NativeDCB.Web` is a standalone Blazor WebAssembly application with explicit controls for every RPC, direct gRPC-Web calls, incremental stream output and cancellation, and a prominent NDL editor. It has no BFF.
@@ -45,13 +45,15 @@ The server also exposes HTTP `GET /health/live` (`200`, `{live:true}`) and `GET 
 | `RegisterEventSchema` | Parses the supported schema profile, requires an event key, checks replacement compatibility, and durably updates the current catalog. |
 | `RegisterCommandSchema` | Equivalent current-catalog registration without the event-key requirement. |
 | `RemoveSchema` | Removes an event or command schema and returns its old fingerprint. It does not rewrite events or handlers. |
+| `GetSchema` | Returns the current event or command schema document and fingerprint. The kind is required. |
+| `ListSchemas` | Lists current schema summaries ordered by kind and name. An unspecified kind includes both event and command schemas. |
 | `RegisterHandler` | Registers exactly one handler either from NDL source or serialized `DecisionPlan` in `plan_json`. Invalid source/plan returns a normal response with `handler.valid=false` and diagnostics; it does not replace a valid existing handler. |
 | `RemoveHandler` | Removes the current handler and returns source/plan fingerprints. |
-| `GetHandler` | Returns the current source, command type, fingerprints, and `valid=true`. Compiled plan JSON is not returned. |
+| `GetHandler` | Returns current source, command type, fingerprints, and `valid=true`. `include_plan_json` includes the authoritative stored plan. `generate_ndl` requests a canonical NDL representation and returns `NDL3001` generation diagnostics when lossless conversion is impossible. |
 | `ListHandlers` | Lists current handlers ordered by name. |
 | `ValidateNdl` | Parses and performs the server's limited semantic/schema validation without persistence. Event transient schemas participate; command transient schemas are accepted but not used for semantic validation. |
 
-Catalog mutation requires `Recovering` or `Ready`, though recovery is performed synchronously inside the activating call and is not normally externally concurrent with a catalog request. `allow_incompatible` affects schema replacement compatibility. It is carried for handlers but no handler compatibility override/audit logic is currently implemented.
+Catalog mutation requires `Recovering` or `Ready`, though recovery is performed synchronously inside the activating call and is not normally externally concurrent with a catalog request. Catalog reads expose current state, not superseded registrations or history. `allow_incompatible` affects schema replacement compatibility. It is carried for handlers but no handler compatibility override/audit logic is currently implemented.
 
 Schema details are in [Requirements](requirements.md). Diagnostics currently include lexer/parser `NDL0001`-style codes, server `NDL2001`, plan `PLAN1001`/`PLAN2001`, and compatibility `SCHEMA2001`.
 

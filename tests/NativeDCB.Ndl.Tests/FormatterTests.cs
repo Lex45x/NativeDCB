@@ -51,6 +51,9 @@ public class FormatterTests
     [InlineData("a - (b - c)", "a - (b - c)")]
     [InlineData("not (a or b)", "not (a or b)")]
     [InlineData("a ?? b ?? c", "a ?? b ?? c")]
+    [InlineData("(a ?? b) ?? c", "(a ?? b) ?? c")]
+    [InlineData("(a ? b : c) ? d : e", "(a ? b : c) ? d : e")]
+    [InlineData("1.0", "1.0")]
     public void PreservesExpressionMeaning(string expression, string expected)
     {
         string formatted = Ndl.Format(TestSources.DecisionWithExpression(expression));

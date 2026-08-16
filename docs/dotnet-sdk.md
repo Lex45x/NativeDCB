@@ -144,7 +144,7 @@ await client.RegisterCommandSchemaAsync<SubscribeStudentToCourse>("school");
 await client.RegisterDecisionAsync("school", "SubscribeStudentSdk", definition);
 ```
 
-`RegisterDecisionAsync` serializes the plan into `RegisterHandlerRequest.plan_json`; it does not generate NDL. The server validates language/source fields, keyed includes, non-empty emissions, known key properties, and any matching current schema fingerprints before persistence.
+`RegisterDecisionAsync` serializes the plan into `RegisterHandlerRequest.plan_json`; it does not generate NDL during registration. The server validates language/source fields, keyed includes, non-empty emissions, known key properties, and any matching current schema fingerprints before persistence. `GetHandlerAsync` can later request the stored plan and a best-effort canonical NDL representation; generated NDL is separate from original source and can report conversion diagnostics.
 
 ## Client API
 
@@ -153,7 +153,7 @@ await client.RegisterDecisionAsync("school", "SubscribeStudentSdk", definition);
 The client provides:
 
 - Database: `ListDatabasesAsync`, `CreateDatabaseAsync`, `GetDatabaseInfoAsync`, `GetHealthAsync`, `GetCapabilitiesAsync`, and `GetHeadAsync`
-- Catalog: schema and handler registration, `RemoveSchemaAsync`, `RemoveHandlerAsync`, `GetHandlerAsync`, `ListHandlersAsync`, decision registration, and `ValidateNdlAsync`
+- Catalog: schema and handler registration, `GetSchemaAsync`, `ListSchemasAsync`, `RemoveSchemaAsync`, `RemoveHandlerAsync`, `GetHandlerAsync`, `ListHandlersAsync`, decision registration, and `ValidateNdlAsync`
 - Command: `ExecuteHandlerAsync<TCommand>` and `GetEventsByCommandIdAsync`
 - Event: `ReadEventsByRangeAsync`, `ReadEventsByQueryAsync`, `ReadEventsByTypeAndKeysAsync`, and `SubscribeEventsAsync` as `IAsyncEnumerable<SequencedEvent>`
 - Statement: `ExecuteStatementAsync` as `IAsyncEnumerable<StatementResult>` and `ExplainStatementAsync`

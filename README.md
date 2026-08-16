@@ -36,7 +36,7 @@ In another shell, create the database with the repository CLI:
 dotnet run --project src\NativeDCB.Cli -- database create --database school
 ```
 
-The CLI defaults to `http://localhost:5010` and covers all 27 RPCs. See the [CLI reference](docs/cli.md) for schemas, NDL statements, commands, reads, subscriptions, input conventions, and exit codes.
+The CLI defaults to `http://localhost:5010` and covers all 29 RPCs. See the [CLI reference](docs/cli.md) for schemas, NDL statements, commands, reads, subscriptions, input conventions, and exit codes.
 
 Start the standalone WebAssembly console with its `https` profile:
 
@@ -44,7 +44,7 @@ Start the standalone WebAssembly console with its `https` profile:
 dotnet run --project src\NativeDCB.Web --launch-profile https
 ```
 
-Open `https://localhost:7229`. The browser loads a standalone Blazor WebAssembly application and calls `https://localhost:7154` directly with gRPC-Web; there is no Web backend-for-frontend. The workbench provides explicit controls for all 27 RPCs, incremental streaming and cancellation, and a prominent NDL editor shared by validation, explanation, and execution.
+Open `https://localhost:7229`. The browser loads a standalone Blazor WebAssembly application and calls `https://localhost:7154` directly with gRPC-Web; there is no Web backend-for-frontend. The workbench provides explicit controls for all 29 RPCs, incremental streaming and cancellation, and a prominent NDL editor shared by validation, explanation, and execution. Service navigation, method counts, and wrapper coverage are derived from protobuf descriptors.
 
 The browser endpoint is configured in public static content at `src/NativeDCB.Web/wwwroot/appsettings.json`; never put credentials or secrets there. Cross-origin browser calls are allowed only from origins in the server's `GrpcWeb:AllowedOrigins` configuration, which defaults to the two local Web launch origins. CORS is not authentication or authorization. NativeDCB currently provides neither, so do not expose the server or console to untrusted networks.
 

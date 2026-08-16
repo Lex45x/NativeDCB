@@ -32,4 +32,46 @@ public sealed class CompilationTests
         Assert.True(result.HasErrors);
         Assert.Empty(result.Plans);
     }
+
+    [Fact]
+    public void FormatsACompiledPlanBackToCanonicalNdl()
+    {
+        DecisionPlan plan = Assert.Single(Ndl.Compile(TestSources.Complete).Plans);
+
+        NdlPlanFormatResult result = Ndl.TryFormat(plan);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(Ndl.Format(TestSources.Complete), result.NdlSource);
+    }
+
+    [Fact]
+    public void RefusesToGenerateNdlWhenStoredBindingsWouldChange()
+    {
+        DecisionPlan plan = Assert.Single(Ndl.Compile(TestSources.Complete).Plans);
+        PlanInclude first = plan.Includes[index: 0] with
+        {
+            KeyBindings = [new PlanKeyBinding("DifferentKey", new PlanSymbolExpression("command"))]
+        };
+        plan = plan with { Includes = [first, .. plan.Includes.Skip(count: 1)] };
+
+        NdlPlanFormatResult result = Ndl.TryFormat(plan);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, value => value.Path.Contains("KeyBindings", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RefusesToGenerateNdlForNamesOutsideTheLanguageGrammar()
+    {
+        DecisionPlan plan = Assert.Single(Ndl.Compile(TestSources.Complete).Plans);
+        plan = plan with { CommandSchema = "subscribe-command" };
+
+        NdlPlanFormatResult result = Ndl.TryFormat(plan);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, value => value.Path == "CommandSchema");
+        NdlPlanFormatException exception = Assert.Throws<NdlPlanFormatException>(() => Ndl.Format(plan));
+        Assert.NotEmpty(exception.Diagnostics);
+    }
 }

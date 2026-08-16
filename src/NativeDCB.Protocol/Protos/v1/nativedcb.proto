@@ -21,6 +21,8 @@ service CatalogService {
   rpc RegisterEventSchema(RegisterSchemaRequest) returns (RegisterSchemaResponse);
   rpc RegisterCommandSchema(RegisterSchemaRequest) returns (RegisterSchemaResponse);
   rpc RemoveSchema(RemoveSchemaRequest) returns (RemoveSchemaResponse);
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse);
   rpc RegisterHandler(RegisterHandlerRequest) returns (RegisterHandlerResponse);
   rpc RemoveHandler(RemoveHandlerRequest) returns (RemoveHandlerResponse);
   rpc GetHandler(GetHandlerRequest) returns (GetHandlerResponse);
@@ -238,6 +240,38 @@ message RemoveSchemaResponse {
   string removed_fingerprint = 1;
 }
 
+message GetSchemaRequest {
+  string database = 1;
+  string schema_name = 2;
+  SchemaKind schema_kind = 3;
+}
+
+message GetSchemaResponse {
+  SchemaDescription schema = 1;
+}
+
+message ListSchemasRequest {
+  string database = 1;
+  SchemaKind schema_kind = 2;
+}
+
+message ListSchemasResponse {
+  repeated SchemaSummary schemas = 1;
+}
+
+message SchemaDescription {
+  string schema_name = 1;
+  SchemaKind schema_kind = 2;
+  string fingerprint = 3;
+  bytes schema_document_json = 4;
+}
+
+message SchemaSummary {
+  string schema_name = 1;
+  SchemaKind schema_kind = 2;
+  string fingerprint = 3;
+}
+
 message RegisterHandlerRequest {
   string database = 1;
   string handler_name = 2;
@@ -264,6 +298,8 @@ message RemoveHandlerResponse {
 message GetHandlerRequest {
   string database = 1;
   string handler_name = 2;
+  bool include_plan_json = 3;
+  bool generate_ndl = 4;
 }
 
 message GetHandlerResponse {
@@ -286,6 +322,9 @@ message HandlerDescription {
   string plan_fingerprint = 5;
   bool valid = 6;
   repeated Diagnostic diagnostics = 7;
+  bytes plan_json = 8;
+  string generated_ndl = 9;
+  repeated Diagnostic ndl_generation_diagnostics = 10;
 }
 
 message HandlerSummary {

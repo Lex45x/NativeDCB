@@ -1,7 +1,7 @@
 # NativeDCB Solution Structure
 
 Status: implementation reference with future work called out explicitly  
-Last verified: 2026-08-14
+Last verified: 2026-08-16
 
 ## Repository
 
@@ -51,7 +51,7 @@ It has no Orleans, protobuf, filesystem, NDL, SDK, or web dependency.
 
 ### `NativeDCB.Ndl`
 
-The NDL library implements source text and spans, lexing, parsing with recovery diagnostics, syntax records, canonical formatting, and compilation to `NativeDCB.Model.DecisionPlan`. It references only `NativeDCB.Model`. Schema-aware semantic validation and execution live in the server, not in this library.
+The NDL library implements source text and spans, lexing, parsing with recovery diagnostics, syntax records, canonical formatting, compilation to `NativeDCB.Model.DecisionPlan`, and diagnostic-bearing conversion of representable plans back to canonical NDL. It references only `NativeDCB.Model`. Schema-aware semantic validation and execution live in the server, not in this library.
 
 ### `NativeDCB.Engine`
 
@@ -77,7 +77,7 @@ The runtime SDK provides schema attributes and reflection descriptors, JSON Sche
 
 ### `NativeDCB.Cli`
 
-The `nativedcb` console application is a native gRPC client for all 27 RPCs. It supports JSON and NDL from command arguments, files, or standard input; query/key convenience inputs; JSON/JSONL output; streaming cancellation; and stable process exit codes. It defaults to the native HTTP/2 endpoint `http://localhost:5010`. See [CLI](cli.md).
+The `nativedcb` console application is a native gRPC client for all 29 RPCs. It supports JSON and NDL from command arguments, files, or standard input; query/key convenience inputs; JSON/JSONL output; streaming cancellation; and stable process exit codes. It defaults to the native HTTP/2 endpoint `http://localhost:5010`. See [CLI](cli.md).
 
 ### `NativeDCB.Sdk.Analyzers` and `NativeDCB.Sdk.Generators`
 
@@ -90,7 +90,7 @@ These are separate `netstandard2.0` Roslyn projects. Each packs its DLL under `a
 
 The web console is a standalone Blazor WebAssembly application. It references only the public protocol, runs inside the browser's WebAssembly runtime boundary, and calls the NativeDCB server directly over gRPC-Web. There is no server-side application host or backend-for-frontend in this project; the development host only serves the static WebAssembly assets.
 
-Its single-page RPC workbench has explicit controls for all 27 methods across the six services. The prominent NDL editor drives validation, explanation, and streamed statement execution. Event reads, follow mode, subscriptions, and statement execution render stream items incrementally, and the active unary call or stream can be cancelled.
+Its single-page RPC workbench has explicit controls for all 29 methods across the six services. Navigation, method counts, request/response type metadata, and missing-wrapper detection are derived from generated protobuf descriptors; domain-heavy forms remain hand-authored. The prominent NDL editor drives validation, explanation, and streamed statement execution. Event reads, follow mode, subscriptions, and statement execution render stream items incrementally, and the active unary call or stream can be cancelled.
 
 `wwwroot/appsettings.json` is public browser configuration and defaults `NativeDCB:ServerAddress` to `https://localhost:7154`. Browser origins must also be present in the server's `GrpcWeb:AllowedOrigins`; the defaults cover the Web project's HTTP and HTTPS launch origins. This CORS allowlist does not provide authentication. The application does not persist operator history, consume external logs, authenticate users, or access database files directly.
 

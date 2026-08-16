@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\src\NativeDCB.Server\NativeDCB.Server.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\NativeDCB.Sdk\NativeDCB.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\NativeDCB.Web\NativeDCB.Web.csproj" />
     <ProjectReference Include="..\..\samples\CourseSubscriptions\CourseSubscriptions.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>

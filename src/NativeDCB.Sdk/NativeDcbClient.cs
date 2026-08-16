@@ -193,7 +193,10 @@ public sealed class NativeDcbClient : IDisposable
         ArgumentNullException.ThrowIfNull(keys);
         ReadEventsByTypeAndKeysRequest request = new()
         {
-            Database = database, EventType = eventType, AfterEventId = afterEventId, Consistency = consistency
+            Database = database,
+            EventType = eventType,
+            AfterEventId = afterEventId,
+            Consistency = consistency
         };
         request.Keys.AddRange(keys.Select(key => new KeyValue { Key = key.Name, Value = key.Value }));
         if (throughEventId.HasValue)
@@ -316,6 +319,40 @@ public sealed class NativeDcbClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
+    public async Task<GetSchemaResponse> GetSchemaAsync(
+        string database,
+        string schemaName,
+        SchemaKind schemaKind,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequired(database, nameof(database));
+        ValidateRequired(schemaName, nameof(schemaName));
+        if (schemaKind is not (SchemaKind.Event or SchemaKind.Command))
+        {
+            throw new ArgumentOutOfRangeException(nameof(schemaKind), "An event or command schema kind is required.");
+        }
+
+        return await _catalogClient.GetSchemaAsync(
+            new GetSchemaRequest { Database = database, SchemaName = schemaName, SchemaKind = schemaKind },
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<ListSchemasResponse> ListSchemasAsync(
+        string database,
+        SchemaKind schemaKind = SchemaKind.Unspecified,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequired(database, nameof(database));
+        if (schemaKind is not (SchemaKind.Unspecified or SchemaKind.Event or SchemaKind.Command))
+        {
+            throw new ArgumentOutOfRangeException(nameof(schemaKind), "The schema kind is invalid.");
+        }
+
+        return await _catalogClient.ListSchemasAsync(
+            new ListSchemasRequest { Database = database, SchemaKind = schemaKind },
+            cancellationToken: cancellationToken);
+    }
+
     public async Task<RemoveHandlerResponse> RemoveHandlerAsync(
         string database,
         string handlerName,
@@ -333,10 +370,27 @@ public sealed class NativeDcbClient : IDisposable
         string handlerName,
         CancellationToken cancellationToken = default)
     {
+        return await GetHandlerAsync(
+            database, handlerName, includePlanJson: false, generateNdl: false, cancellationToken);
+    }
+
+    public async Task<GetHandlerResponse> GetHandlerAsync(
+        string database,
+        string handlerName,
+        bool includePlanJson,
+        bool generateNdl,
+        CancellationToken cancellationToken = default)
+    {
         ValidateRequired(database, nameof(database));
         ValidateRequired(handlerName, nameof(handlerName));
         return await _catalogClient.GetHandlerAsync(
-            new GetHandlerRequest { Database = database, HandlerName = handlerName },
+            new GetHandlerRequest
+            {
+                Database = database,
+                HandlerName = handlerName,
+                IncludePlanJson = includePlanJson,
+                GenerateNdl = generateNdl
+            },
             cancellationToken: cancellationToken);
     }
 
@@ -361,7 +415,9 @@ public sealed class NativeDcbClient : IDisposable
             .ExecuteStatement(
                 new ExecuteStatementRequest
                 {
-                    Database = database, NdlSource = ndlSource, AllowIncompatible = allowIncompatible
+                    Database = database,
+                    NdlSource = ndlSource,
+                    AllowIncompatible = allowIncompatible
                 },
                 cancellationToken: cancellationToken);
         while (await call.ResponseStream.MoveNext(cancellationToken))
@@ -511,7 +567,10 @@ public sealed class NativeDcbClient : IDisposable
         ValidateRange(database, afterEventId, throughEventId);
         ReadEventsByQueryRequest request = new()
         {
-            Database = database, Query = MapQuery(query), AfterEventId = afterEventId, Consistency = consistency
+            Database = database,
+            Query = MapQuery(query),
+            AfterEventId = afterEventId,
+            Consistency = consistency
         };
         if (throughEventId.HasValue)
         {

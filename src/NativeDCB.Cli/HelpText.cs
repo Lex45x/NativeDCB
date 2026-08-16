@@ -22,6 +22,8 @@ internal static class HelpText
                                  catalog register-event-schema         CatalogService.RegisterEventSchema
                                  catalog register-command-schema       CatalogService.RegisterCommandSchema
                                  catalog remove-schema                 CatalogService.RemoveSchema
+                                 catalog get-schema                    CatalogService.GetSchema
+                                 catalog list-schemas                  CatalogService.ListSchemas
                                  catalog register-handler              CatalogService.RegisterHandler
                                  catalog remove-handler                CatalogService.RemoveHandler
                                  catalog get-handler                   CatalogService.GetHandler
@@ -69,6 +71,10 @@ internal static class HelpText
         ["catalog register-command-schema"] = SchemaRegistration("register-command-schema"),
         ["catalog remove-schema"] =
             "Usage: nativedcb catalog remove-schema --database NAME --name NAME --kind event|command",
+        ["catalog get-schema"] =
+            "Usage: nativedcb catalog get-schema --database NAME --name NAME --kind event|command",
+        ["catalog list-schemas"] =
+            "Usage: nativedcb catalog list-schemas --database NAME [--kind event|command]",
         ["catalog register-handler"] = """
                                        Usage: nativedcb catalog register-handler --database NAME --name NAME --command-type TYPE
                                                   [--source TEXT|--source-file PATH|--source-stdin]
@@ -76,7 +82,8 @@ internal static class HelpText
                                        At least source or plan is required. Both may be supplied.
                                        """,
         ["catalog remove-handler"] = "Usage: nativedcb catalog remove-handler --database NAME --name NAME",
-        ["catalog get-handler"] = "Usage: nativedcb catalog get-handler --database NAME --name NAME",
+        ["catalog get-handler"] =
+            "Usage: nativedcb catalog get-handler --database NAME --name NAME [--include-plan] [--generate-ndl]",
         ["catalog list-handlers"] = "Usage: nativedcb catalog list-handlers --database NAME",
         ["catalog validate-ndl"] = """
                                    Usage: nativedcb catalog validate-ndl --database NAME

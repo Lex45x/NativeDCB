@@ -88,7 +88,7 @@ public static class NdlFormatter
         }
 
         private static string Expression(ExpressionSyntax expression, int parentPrecedence = 0,
-            bool rightOperand = false)
+            bool parenthesizeEqualPrecedence = false)
         {
             int precedence = Precedence(expression);
             string text = expression switch
@@ -102,13 +102,20 @@ public static class NdlFormatter
                 UnaryExpressionSyntax unary => Operator(unary.OperatorKind) +
                                                (unary.OperatorKind == SyntaxKind.NotKeyword ? " " : string.Empty) +
                                                Expression(unary.Operand, precedence),
-                BinaryExpressionSyntax binary => Expression(binary.Left, precedence) + " " +
-                                                 Operator(binary.OperatorKind) + " " + Expression(binary.Right,
-                                                     precedence, rightOperand: true),
-                ConditionalExpressionSyntax conditional => Expression(conditional.Condition, precedence) + " ? " +
-                                                           Expression(conditional.WhenTrue) + " : " +
-                                                           Expression(conditional.WhenFalse, precedence,
-                                                               rightOperand: true),
+                BinaryExpressionSyntax binary => Expression(
+                                                      binary.Left,
+                                                      precedence,
+                                                      binary.OperatorKind == SyntaxKind.QuestionQuestionToken) + " " +
+                                                  Operator(binary.OperatorKind) + " " + Expression(
+                                                      binary.Right,
+                                                      precedence,
+                                                      binary.OperatorKind != SyntaxKind.QuestionQuestionToken),
+                ConditionalExpressionSyntax conditional => Expression(
+                                                                conditional.Condition,
+                                                                precedence,
+                                                                parenthesizeEqualPrecedence: true) + " ? " +
+                                                            Expression(conditional.WhenTrue) + " : " +
+                                                            Expression(conditional.WhenFalse, precedence),
                 ObjectExpressionSyntax obj => "{ " +
                                               string.Join(", ",
                                                   obj.Assignments.Select(x => x.Name + " = " + Expression(x.Value))) +
@@ -116,10 +123,8 @@ public static class NdlFormatter
                 _ => throw new ArgumentOutOfRangeException(nameof(expression))
             };
 
-            bool needsParentheses = precedence < parentPrecedence
-                                    || (rightOperand && precedence == parentPrecedence &&
-                                        expression is BinaryExpressionSyntax rightBinary
-                                        && rightBinary.OperatorKind != SyntaxKind.QuestionQuestionToken);
+            bool needsParentheses = precedence < parentPrecedence ||
+                                    (parenthesizeEqualPrecedence && precedence == parentPrecedence);
             return needsParentheses ? "(" + text + ")" : text;
         }
 
@@ -130,7 +135,7 @@ public static class NdlFormatter
                 LiteralKind.Null => "null",
                 LiteralKind.Boolean => (bool)literal.Value! ? "true" : "false",
                 LiteralKind.Integer => ((long)literal.Value!).ToString(CultureInfo.InvariantCulture),
-                LiteralKind.Decimal => ((decimal)literal.Value!).ToString(CultureInfo.InvariantCulture),
+                LiteralKind.Decimal => FormatDecimal((decimal)literal.Value!),
                 LiteralKind.String => Quote((string)literal.Value!),
                 LiteralKind.Guid => ((Guid)literal.Value!).ToString("D", CultureInfo.InvariantCulture),
                 LiteralKind.DateTime => ((DateTimeOffset)literal.Value!).ToString("O", CultureInfo.InvariantCulture),
@@ -162,6 +167,12 @@ public static class NdlFormatter
             }
 
             return value.TotalMilliseconds.ToString(CultureInfo.InvariantCulture) + "ms";
+        }
+
+        private static string FormatDecimal(decimal value)
+        {
+            string text = value.ToString(CultureInfo.InvariantCulture);
+            return text.Contains('.', StringComparison.Ordinal) ? text : text + ".0";
         }
 
         private static string Quote(string value)
