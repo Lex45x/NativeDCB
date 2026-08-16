@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
+    <PackageReference Include="Grpc.AspNetCore.Web" Version="2.83.0" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NativeDCB.Engine\NativeDCB.Engine.csproj" />
+    <ProjectReference Include="..\NativeDCB.Model\NativeDCB.Model.csproj" />
+    <ProjectReference Include="..\NativeDCB.Ndl\NativeDCB.Ndl.csproj" />
+    <ProjectReference Include="..\NativeDCB.Protocol\NativeDCB.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>

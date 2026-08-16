@@ -1,0 +1,713 @@
+@page "/"
+@using System.Text.Json
+@using Grpc.Core
+@implements IDisposable
+@inject INativeDcbConsole Console
+
+<PageTitle>NativeDCB / RPC Workbench</PageTitle>
+
+<header class="masthead">
+    <a class="wordmark" href="/" aria-label="NativeDCB RPC workbench">
+        <span class="wordmark-mark">N/</span>
+        <span>NativeDCB</span>
+    </a>
+    <div class="masthead-title">
+        <span class="eyebrow">browser operator surface</span>
+        <strong>RPC Workbench</strong>
+    </div>
+    <div class="connection-state @ConnectionClass">
+        <span class="signal" aria-hidden="true"></span>
+        @connectionStatus
+    </div>
+</header>
+
+<section class="database-bar" aria-label="Database target">
+    <label for="database">Target database</label>
+    <div class="database-input">
+        <span>/</span>
+        <input id="database" @bind="database" @bind:event="oninput" placeholder="database path"
+               autocomplete="off" disabled="@busy">
+    </div>
+    <button class="button button-quiet" @onclick="ListDatabasesAsync" disabled="@busy">List databases</button>
+    <span class="endpoint">gRPC-Web / configured endpoint</span>
+</section>
+
+<section class="ndl-studio" aria-labelledby="ndl-heading">
+    <div class="studio-heading">
+        <div>
+            <span class="eyebrow">NDL source / primary workspace</span>
+            <h1 id="ndl-heading">Compose, inspect, execute.</h1>
+        </div>
+        <label class="check-control">
+            <input type="checkbox" @bind="allowIncompatible">
+            allow incompatible
+        </label>
+    </div>
+    <div class="code-editor">
+        <div class="line-number">01</div>
+        <textarea aria-label="NDL source" spellcheck="false" @bind="ndlSource" @bind:event="oninput"
+                  @onkeydown="HandleNdlKeyDownAsync" placeholder="Enter NDL source..."></textarea>
+    </div>
+    <div class="studio-actions">
+        <span class="hint">Execute streams each StatementResult. Ctrl+Enter runs the statement.</span>
+        <button class="button" @onclick="ExplainStatementAsync" disabled="@busy">ExplainStatement</button>
+        <button class="button button-run" @onclick="ExecuteStatementAsync" disabled="@busy">ExecuteStatement</button>
+    </div>
+</section>
+
+<div class="workbench">
+<nav class="service-rail" aria-label="Protocol services">
+    @foreach (var tab in Enum.GetValues<ServiceTab>())
+    {
+        <button class="service-tab @(activeTab == tab ? "active" : null)" @onclick="() => activeTab = tab">
+            <span>@TabNumber(tab)</span>
+            <strong>@TabName(tab)</strong>
+            <small>@RpcCount(tab) RPC</small>
+        </button>
+    }
+</nav>
+
+<main class="service-pane">
+<div class="service-heading">
+    <div>
+        <span class="eyebrow">nativedcb.v1</span>
+        <h2>@TabName(activeTab)Service</h2>
+    </div>
+    <span class="rpc-total">@RpcCount(activeTab).ToString("D2") methods</span>
+</div>
+
+@if (activeTab == ServiceTab.Database)
+{
+    <div class="rpc-grid">
+        <RpcCard Title="ListDatabases" Note="Discover every database visible to the server.">
+            <button class="button button-run" @onclick="ListDatabasesAsync" disabled="@busy">Invoke</button>
+        </RpcCard>
+        <RpcCard Title="CreateDatabase" Note="Create and open a database path.">
+            <label>
+                <span>New database</span><input @bind="newDatabase" @bind:event="oninput" placeholder="orders">
+            </label>
+            <button class="button button-run" @onclick="CreateDatabaseAsync" disabled="@busy">Create</button>
+        </RpcCard>
+        <RpcCard Title="GetDatabaseInfo" Note="Version, partition, lock, catalog, and readiness detail.">
+            <button class="button button-run" @onclick="GetDatabaseInfoAsync" disabled="@busy">Inspect target</button>
+        </RpcCard>
+        <RpcCard Title="GetHealth" Note="Server liveness and per-database readiness.">
+            <button class="button button-run" @onclick="GetHealthAsync" disabled="@busy">Check health</button>
+        </RpcCard>
+        <RpcCard Title="GetCapabilities" Note="Protocol, NDL, query features, and server limits.">
+            <button class="button button-run" @onclick="GetCapabilitiesAsync" disabled="@busy">Read capabilities</button>
+        </RpcCard>
+        <RpcCard Title="GetHead" Note="Read the current global event head.">
+            <button class="button button-run" @onclick="GetHeadAsync" disabled="@busy">Read head</button>
+        </RpcCard>
+    </div>
+}
+else if (activeTab == ServiceTab.Catalog)
+{
+    <div class="rpc-grid catalog-grid">
+        <RpcCard Title="RegisterEventSchema / RegisterCommandSchema" Note="Send an arbitrary JSON Schema document.">
+            <div class="field-pair">
+                <label>
+                    <span>Schema name</span><input @bind="schemaName" @bind:event="oninput" placeholder="OrderPlaced">
+                </label>
+                <label class="check-control inline-check"><input type="checkbox" @bind="schemaAllowIncompatible">allow incompatible</label>
+            </div>
+            <label>
+                <span>Schema JSON</span><textarea class="json-input" @bind="schemaJson" @bind:event="oninput" spellcheck="false"></textarea>
+            </label>
+            <div class="button-row">
+                <button class="button button-run" @onclick="RegisterEventSchemaAsync" disabled="@busy">Register event</button>
+                <button class="button" @onclick="RegisterCommandSchemaAsync" disabled="@busy">Register command</button>
+            </div>
+        </RpcCard>
+        <RpcCard Title="RemoveSchema" Note="Remove one event or command schema by name.">
+            <div class="field-pair">
+                <label>
+                    <span>Schema name</span><input @bind="schemaName" @bind:event="oninput">
+                </label>
+                <label>
+                    <span>Schema kind</span>
+                    <select @bind="schemaKind">
+                        <option>Event</option><option>Command</option>
+                    </select>
+                </label>
+            </div>
+            <button class="button button-danger" @onclick="RemoveSchemaAsync" disabled="@busy">Remove schema</button>
+        </RpcCard>
+        <RpcCard Title="RegisterHandler" Note="Compile NDL source or install plan JSON. Provide exactly one.">
+            <div class="field-pair">
+                <label>
+                    <span>Handler name</span><input @bind="handlerName" @bind:event="oninput" placeholder="place-order">
+                </label>
+                <label>
+                    <span>Command type</span><input @bind="commandType" @bind:event="oninput" placeholder="PlaceOrder">
+                </label>
+            </div>
+            <label>
+                <span>Handler NDL</span><textarea @bind="handlerNdl" @bind:event="oninput" spellcheck="false" placeholder="Leave empty when sending plan JSON"></textarea>
+            </label>
+            <label>
+                <span>Plan JSON</span><textarea class="json-input short" @bind="handlerPlanJson" @bind:event="oninput" spellcheck="false" placeholder="Leave empty when compiling NDL"></textarea>
+            </label>
+            <label class="check-control inline-check"><input type="checkbox" @bind="handlerAllowIncompatible">allow incompatible replacement</label>
+            <button class="button button-run" @onclick="RegisterHandlerAsync" disabled="@busy">Register handler</button>
+        </RpcCard>
+        <RpcCard Title="Handler lookup" Note="RemoveHandler, GetHandler, and ListHandlers share the current handler target.">
+            <label>
+                <span>Handler name</span><input @bind="handlerName" @bind:event="oninput" placeholder="place-order">
+            </label>
+            <div class="button-row">
+                <button class="button button-danger" @onclick="RemoveHandlerAsync" disabled="@busy">RemoveHandler</button>
+                <button class="button" @onclick="GetHandlerAsync" disabled="@busy">GetHandler</button>
+                <button class="button button-run" @onclick="ListHandlersAsync" disabled="@busy">ListHandlers</button>
+            </div>
+        </RpcCard>
+        <RpcCard Title="ValidateNdl" Note="Validate the prominent NDL source with optional transient schemas.">
+            <label>
+                <span>Transient schemas JSON <small>[{ kind, name, schema }]</small></span>
+                <textarea class="json-input" @bind="transientSchemasJson" @bind:event="oninput" spellcheck="false"></textarea>
+            </label>
+            <button class="button button-run" @onclick="ValidateNdlAsync" disabled="@busy">Validate NDL</button>
+        </RpcCard>
+    </div>
+}
+else if (activeTab == ServiceTab.Command)
+{
+    <div class="rpc-grid two-up">
+        <RpcCard Title="ExecuteHandler" Note="Execute a registered handler with arbitrary command JSON.">
+            <div class="field-pair">
+                <label>
+                    <span>Handler name</span><input @bind="handlerName" @bind:event="oninput" placeholder="place-order">
+                </label>
+                <label>
+                    <span>Command ID <small>optional UUID</small></span><input @bind="commandId" @bind:event="oninput">
+                </label>
+            </div>
+            <label>
+                <span>Command JSON</span><textarea class="json-input" @bind="commandJson" @bind:event="oninput" spellcheck="false"></textarea>
+            </label>
+            <button class="button button-run" @onclick="ExecuteHandlerAsync" disabled="@busy">Execute command</button>
+        </RpcCard>
+        <RpcCard Title="GetEventsByCommandId" Note="Reconcile every event committed by a command UUID.">
+            <label>
+                <span>Command ID</span><input @bind="commandId" @bind:event="oninput" placeholder="00000000-0000-0000-0000-000000000000">
+            </label>
+            <button class="button button-run" @onclick="GetEventsByCommandIdAsync" disabled="@busy">Get events</button>
+        </RpcCard>
+    </div>
+}
+else if (activeTab == ServiceTab.Event)
+{
+    <div class="shared-range">
+        <label>
+            <span>After ID <small>exclusive</small></span><input type="number" min="0" @bind="afterEventId">
+        </label>
+        <label>
+            <span>Through ID <small>optional</small></span><input type="number" min="0" @bind="throughEventId" placeholder="head">
+        </label>
+        <label>
+            <span>Limit <small>optional</small></span><input type="number" min="1" @bind="eventLimit">
+        </label>
+        <label class="check-control inline-check"><input type="checkbox" @bind="committedScan">committed scan</label>
+    </div>
+    <div class="rpc-grid two-up">
+        <RpcCard Title="ReadEventsByRange" Note="Snapshot or follow the globally ordered event log.">
+            <label class="check-control inline-check"><input type="checkbox" @bind="followRange">follow after snapshot</label>
+            <button class="button button-run" @onclick="ReadEventsByRangeAsync" disabled="@busy">@(followRange ? "Follow range" : "Read range")</button>
+        </RpcCard>
+        <RpcCard Title="ReadEventsByQuery" Note="Query an OR-list item by event types and consistency keys.">
+            <label>
+                <span>Event types <small>comma separated</small></span><input @bind="queryEventTypes" @bind:event="oninput" placeholder="OrderPlaced,OrderCancelled">
+            </label>
+            <label>
+                <span>Query keys <small>one key=value per line</small></span><textarea @bind="queryKeys" @bind:event="oninput" placeholder="orderId=42"></textarea>
+            </label>
+            <button class="button button-run" @onclick="ReadEventsByQueryAsync" disabled="@busy">Run query</button>
+        </RpcCard>
+        <RpcCard Title="ReadEventsByTypeAndKeys" Note="Use the dedicated event type and keys read path.">
+            <label>
+                <span>Event type</span><input @bind="singleEventType" @bind:event="oninput" placeholder="OrderPlaced">
+            </label>
+            <label>
+                <span>Keys <small>one key=value per line</small></span><textarea @bind="typeKeys" @bind:event="oninput" placeholder="orderId=42"></textarea>
+            </label>
+            <button class="button button-run" @onclick="ReadEventsByTypeAndKeysAsync" disabled="@busy">Read type + keys</button>
+        </RpcCard>
+        <RpcCard Title="SubscribeEvents" Note="Open a cancellable live stream. Results appear incrementally below.">
+            <label>
+                <span>Query event types <small>comma separated</small></span><input @bind="subscribeEventTypes" @bind:event="oninput">
+            </label>
+            <div class="field-pair">
+                <label>
+                    <span>Query item keys</span><textarea @bind="subscribeQueryKeys" @bind:event="oninput" placeholder="tenant=acme"></textarea>
+                </label>
+                <label>
+                    <span>Subscription keys</span><textarea @bind="subscribeKeys" @bind:event="oninput" placeholder="region=west"></textarea>
+                </label>
+            </div>
+            <button class="button button-run" @onclick="SubscribeEventsAsync" disabled="@busy">Subscribe</button>
+        </RpcCard>
+    </div>
+}
+else if (activeTab == ServiceTab.Statement)
+{
+    <div class="statement-callout">
+        <span class="eyebrow">shared NDL workspace</span>
+        <h3>Both statement RPCs operate on the editor above.</h3>
+        <p><code>ExecuteStatement</code> appends streamed results incrementally. <code>ExplainStatement</code> returns diagnostics, inferred schemas, query templates, and a plan without execution.</p>
+        <div class="button-row">
+            <button class="button" @onclick="ExplainStatementAsync" disabled="@busy">ExplainStatement</button>
+            <button class="button button-run" @onclick="ExecuteStatementAsync" disabled="@busy">ExecuteStatement</button>
+        </div>
+    </div>
+}
+else
+{
+    <div class="rpc-grid admin-grid">
+        <RpcCard Title="ListPartitions" Note="Inspect partition ranges and embedded state status.">
+            <button class="button button-run" @onclick="ListPartitionsAsync" disabled="@busy">List partitions</button>
+        </RpcCard>
+        <RpcCard Title="ListIndexes" Note="Inspect query index heads, lag, and hydration.">
+            <button class="button button-run" @onclick="ListIndexesAsync" disabled="@busy">List indexes</button>
+        </RpcCard>
+        <RpcCard Title="GetStateFileStatus" Note="Read detailed status for one partition state file.">
+            <label>
+                <span>Partition number</span><input type="number" min="0" @bind="partitionNumber">
+            </label>
+            <button class="button button-run" @onclick="GetStateFileStatusAsync" disabled="@busy">Get status</button>
+        </RpcCard>
+        <RpcCard Title="RequestIndexRebuild" Note="Request index hydration for one type and key shape.">
+            <label>
+                <span>Event type</span><input @bind="indexEventType" @bind:event="oninput" placeholder="OrderPlaced">
+            </label>
+            <label>
+                <span>Index keys <small>one key=value per line</small></span><textarea @bind="indexKeys" @bind:event="oninput" placeholder="orderId=*"></textarea>
+            </label>
+            <button class="button button-danger" @onclick="RequestIndexRebuildAsync" disabled="@busy">Request rebuild</button>
+        </RpcCard>
+        <RpcCard Title="RequestStateRebuild" Note="Request state reconstruction for one partition.">
+            <label>
+                <span>Partition number</span><input type="number" min="0" @bind="partitionNumber">
+            </label>
+            <button class="button button-danger" @onclick="RequestStateRebuildAsync" disabled="@busy">Request rebuild</button>
+        </RpcCard>
+    </div>
+}
+</main>
+</div>
+
+<section class="output" aria-live="polite" aria-busy="@busy">
+    <div class="output-heading">
+        <div>
+            <span class="eyebrow">formatted protobuf JSON / incremental stream</span>
+            <h2>Output</h2>
+        </div>
+        <div class="output-actions">
+            @if (busy)
+            {
+                <span class="working">
+                    <i></i>@activeRpc
+                </span>
+                <button class="button button-cancel" @onclick="CancelOperation">Cancel stream / call</button>
+            }
+            <button class="button" @onclick="ClearOutput" disabled="@(busy || output.Count == 0)">Clear</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(uiError))
+    {
+        <div class="transport-error">
+            <span>transport / input</span><strong>@uiError</strong>
+        </div>
+    }
+    @if (operationCancelled)
+    {
+        <div class="cancel-notice">Operation cancelled. @output.Count response item(s) retained.</div>
+    }
+    @if (output.Count == 0 && string.IsNullOrWhiteSpace(uiError))
+    {
+        <div class="empty-output">
+            <span class="prompt">&gt;_</span>
+            <p>Select an RPC and invoke it. Streaming responses arrive here immediately.</p>
+        </div>
+    }
+    else if (output.Count > 0)
+    {
+        <ol class="json-stream">
+            @foreach (var entry in output)
+            {
+                <li>
+                    <header>
+                        <span>@entry.Sequence.ToString("D3")</span><strong>@entry.Rpc</strong><time>@entry.Timestamp.ToString("HH:mm:ss.fff")</time>
+                    </header>
+                    <pre><code>@entry.Json</code></pre>
+                </li>
+            }
+        </ol>
+    }
+</section>
+
+@code {
+    private readonly List<OutputEntry> output = [];
+    private CancellationTokenSource? operationSource;
+    private ServiceTab activeTab = ServiceTab.Database;
+    private string database = "default";
+    private string newDatabase = string.Empty;
+    private string connectionStatus = "not contacted";
+    private string activeRpc = string.Empty;
+    private string? uiError;
+    private string ndlSource = "// Enter NativeDCB NDL here";
+    private bool allowIncompatible;
+    private bool busy;
+    private bool operationCancelled;
+    private bool disposed;
+
+    private string schemaName = string.Empty;
+    private string schemaKind = "Event";
+    private string schemaJson = "{\n  \"type\": \"object\",\n  \"properties\": {}\n}";
+    private bool schemaAllowIncompatible;
+    private string handlerName = string.Empty;
+    private string commandType = string.Empty;
+    private string handlerNdl = string.Empty;
+    private string handlerPlanJson = string.Empty;
+    private bool handlerAllowIncompatible;
+    private string transientSchemasJson = "[]";
+
+    private string commandJson = "{\n  \"value\": null\n}";
+    private string commandId = string.Empty;
+
+    private long afterEventId;
+    private long? throughEventId;
+    private uint? eventLimit = 100;
+    private bool committedScan = true;
+    private bool followRange;
+    private string queryEventTypes = string.Empty;
+    private string queryKeys = string.Empty;
+    private string singleEventType = string.Empty;
+    private string typeKeys = string.Empty;
+    private string subscribeEventTypes = string.Empty;
+    private string subscribeQueryKeys = string.Empty;
+    private string subscribeKeys = string.Empty;
+
+    private uint partitionNumber;
+    private string indexEventType = string.Empty;
+    private string indexKeys = string.Empty;
+
+    private string ConnectionClass => connectionStatus == "server available"
+        ? "online"
+        : connectionStatus == "server unavailable"
+            ? "offline"
+            : string.Empty;
+
+    private Task ListDatabasesAsync()
+    {
+        return RunUnaryAsync("Database.ListDatabases", Console.ListDatabasesAsync);
+    }
+
+    private Task CreateDatabaseAsync()
+    {
+        return RunUnaryAsync("Database.CreateDatabase", token => Console.CreateDatabaseAsync(newDatabase, token));
+    }
+
+    private Task GetDatabaseInfoAsync()
+    {
+        return RunUnaryAsync("Database.GetDatabaseInfo", token => Console.GetDatabaseInfoAsync(database, token));
+    }
+
+    private Task GetHealthAsync()
+    {
+        return RunUnaryAsync("Database.GetHealth", Console.GetHealthAsync);
+    }
+
+    private Task GetCapabilitiesAsync()
+    {
+        return RunUnaryAsync("Database.GetCapabilities", Console.GetCapabilitiesAsync);
+    }
+
+    private Task GetHeadAsync()
+    {
+        return RunUnaryAsync("Database.GetHead", token => Console.GetHeadAsync(database, token));
+    }
+
+    private Task RegisterEventSchemaAsync()
+    {
+        return RunUnaryAsync("Catalog.RegisterEventSchema", token =>
+            Console.RegisterEventSchemaAsync(database, schemaName, schemaJson, schemaAllowIncompatible, token));
+    }
+
+    private Task RegisterCommandSchemaAsync()
+    {
+        return RunUnaryAsync("Catalog.RegisterCommandSchema", token =>
+            Console.RegisterCommandSchemaAsync(database, schemaName, schemaJson, schemaAllowIncompatible, token));
+    }
+
+    private Task RemoveSchemaAsync()
+    {
+        return RunUnaryAsync("Catalog.RemoveSchema", token =>
+            Console.RemoveSchemaAsync(database, schemaName, schemaKind, token));
+    }
+
+    private Task RegisterHandlerAsync()
+    {
+        return RunUnaryAsync("Catalog.RegisterHandler", token =>
+            Console.RegisterHandlerAsync(database, handlerName, commandType, handlerNdl, handlerPlanJson,
+                handlerAllowIncompatible, token));
+    }
+
+    private Task RemoveHandlerAsync()
+    {
+        return RunUnaryAsync("Catalog.RemoveHandler", token => Console.RemoveHandlerAsync(database, handlerName, token));
+    }
+
+    private Task GetHandlerAsync()
+    {
+        return RunUnaryAsync("Catalog.GetHandler", token => Console.GetHandlerAsync(database, handlerName, token));
+    }
+
+    private Task ListHandlersAsync()
+    {
+        return RunUnaryAsync("Catalog.ListHandlers", token => Console.ListHandlersAsync(database, token));
+    }
+
+    private Task ValidateNdlAsync()
+    {
+        return RunUnaryAsync("Catalog.ValidateNdl", token =>
+            Console.ValidateNdlAsync(database, ndlSource, transientSchemasJson, token));
+    }
+
+    private Task ExecuteHandlerAsync()
+    {
+        return RunUnaryAsync("Command.ExecuteHandler", token =>
+            Console.ExecuteHandlerAsync(database, handlerName, commandJson, commandId, token));
+    }
+
+    private Task GetEventsByCommandIdAsync()
+    {
+        return RunUnaryAsync("Command.GetEventsByCommandId", token =>
+            Console.GetEventsByCommandIdAsync(database, commandId, token));
+    }
+
+    private Task ReadEventsByRangeAsync()
+    {
+        return RunStreamAsync("Event.ReadEventsByRange", token =>
+            Console.ReadEventsByRangeAsync(database, afterEventId, throughEventId, eventLimit, followRange, token));
+    }
+
+    private Task ReadEventsByQueryAsync()
+    {
+        return RunStreamAsync("Event.ReadEventsByQuery", token =>
+            Console.ReadEventsByQueryAsync(database, queryEventTypes, queryKeys, afterEventId, throughEventId,
+                eventLimit, committedScan, token));
+    }
+
+    private Task ReadEventsByTypeAndKeysAsync()
+    {
+        return RunStreamAsync("Event.ReadEventsByTypeAndKeys", token =>
+            Console.ReadEventsByTypeAndKeysAsync(database, singleEventType, typeKeys, afterEventId, throughEventId,
+                eventLimit, committedScan, token));
+    }
+
+    private Task SubscribeEventsAsync()
+    {
+        return RunStreamAsync("Event.SubscribeEvents", token =>
+            Console.SubscribeEventsAsync(database, afterEventId, subscribeEventTypes, subscribeQueryKeys, subscribeKeys, token));
+    }
+
+    private Task ExecuteStatementAsync()
+    {
+        return RunStreamAsync("Statement.ExecuteStatement", token =>
+            Console.ExecuteStatementAsync(database, ndlSource, allowIncompatible, token));
+    }
+
+    private Task ExplainStatementAsync()
+    {
+        return RunUnaryAsync("Statement.ExplainStatement", token =>
+            Console.ExplainStatementAsync(database, ndlSource, token));
+    }
+
+    private Task ListPartitionsAsync()
+    {
+        return RunUnaryAsync("Administration.ListPartitions", token => Console.ListPartitionsAsync(database, token));
+    }
+
+    private Task ListIndexesAsync()
+    {
+        return RunUnaryAsync("Administration.ListIndexes", token => Console.ListIndexesAsync(database, token));
+    }
+
+    private Task GetStateFileStatusAsync()
+    {
+        return RunUnaryAsync("Administration.GetStateFileStatus", token =>
+            Console.GetStateFileStatusAsync(database, partitionNumber, token));
+    }
+
+    private Task RequestIndexRebuildAsync()
+    {
+        return RunUnaryAsync("Administration.RequestIndexRebuild", token =>
+            Console.RequestIndexRebuildAsync(database, indexEventType, indexKeys, token));
+    }
+
+    private Task RequestStateRebuildAsync()
+    {
+        return RunUnaryAsync("Administration.RequestStateRebuild", token =>
+            Console.RequestStateRebuildAsync(database, partitionNumber, token));
+    }
+
+    private async Task RunUnaryAsync(string rpc, Func<CancellationToken, Task<string>> operation)
+    {
+        if (busy) return;
+        var source = StartOperation(rpc);
+        try
+        {
+            var json = await operation(source.Token);
+            Append(rpc, json);
+            connectionStatus = "server available";
+        }
+        catch (Exception) when (source.IsCancellationRequested)
+        {
+            operationCancelled = true;
+        }
+        catch (Exception exception)
+        {
+            HandleError(exception);
+        }
+        finally
+        {
+            CompleteOperation(source);
+        }
+    }
+
+    private async Task RunStreamAsync(string rpc, Func<CancellationToken, IAsyncEnumerable<string>> operation)
+    {
+        if (busy) return;
+        var source = StartOperation(rpc);
+        try
+        {
+            await foreach (var json in operation(source.Token).WithCancellation(source.Token))
+            {
+                Append(rpc, json);
+                connectionStatus = "server available";
+                if (!disposed) await InvokeAsync(StateHasChanged);
+            }
+
+            connectionStatus = "server available";
+        }
+        catch (Exception) when (source.IsCancellationRequested)
+        {
+            operationCancelled = true;
+        }
+        catch (Exception exception)
+        {
+            HandleError(exception);
+        }
+        finally
+        {
+            CompleteOperation(source);
+        }
+    }
+
+    private CancellationTokenSource StartOperation(string rpc)
+    {
+        CancellationTokenSource source = new();
+        operationSource = source;
+        activeRpc = rpc;
+        busy = true;
+        uiError = null;
+        operationCancelled = false;
+        output.Clear();
+        return source;
+    }
+
+    private void CompleteOperation(CancellationTokenSource source)
+    {
+        if (ReferenceEquals(operationSource, source))
+        {
+            operationSource = null;
+            busy = false;
+        }
+
+        source.Dispose();
+    }
+
+    private void Append(string rpc, string json)
+    {
+        output.Add(new OutputEntry(output.Count + 1, rpc, DateTimeOffset.Now, json));
+    }
+
+    private void HandleError(Exception exception)
+    {
+        uiError = exception switch
+        {
+            RpcException rpc => $"{rpc.StatusCode}: {rpc.Status.Detail}",
+            JsonException json => $"Invalid JSON: {json.Message}",
+            ArgumentException argument => argument.Message.Split(" (Parameter")[0],
+            _ => exception.Message
+        };
+        if (exception is RpcException { StatusCode: StatusCode.Unavailable }) connectionStatus = "server unavailable";
+    }
+
+    private async Task HandleNdlKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (args.CtrlKey && string.Equals(args.Key, "Enter", StringComparison.OrdinalIgnoreCase) && !busy)
+        {
+            await ExecuteStatementAsync();
+        }
+    }
+
+    private void CancelOperation()
+    {
+        operationSource?.Cancel();
+    }
+
+    private void ClearOutput()
+    {
+        output.Clear();
+        uiError = null;
+        operationCancelled = false;
+    }
+
+    private static string TabNumber(ServiceTab tab)
+    {
+        return ((int)tab + 1).ToString("D2");
+    }
+
+    private static string TabName(ServiceTab tab)
+    {
+        return tab.ToString();
+    }
+
+    private static int RpcCount(ServiceTab tab)
+    {
+        return tab switch
+        {
+            ServiceTab.Database => 6,
+            ServiceTab.Catalog => 8,
+            ServiceTab.Command => 2,
+            ServiceTab.Event => 4,
+            ServiceTab.Statement => 2,
+            ServiceTab.Administration => 5,
+            _ => 0
+        };
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        operationSource?.Cancel();
+        operationSource?.Dispose();
+        operationSource = null;
+    }
+
+    private sealed record OutputEntry(int Sequence, string Rpc, DateTimeOffset Timestamp, string Json);
+
+    private enum ServiceTab
+    {
+        Database,
+        Catalog,
+        Command,
+        Event,
+        Statement,
+        Administration
+    }
+
+}

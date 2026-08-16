@@ -1,0 +1,28 @@
+<article class="rpc-card">
+    <header>
+        <span class="rpc-mark">rpc</span>
+        <div>
+            <h3>@Title</h3>
+            <p>@Note</p>
+        </div>
+    </header>
+    <div class="rpc-controls">
+        @ChildContent
+    </div>
+</article>
+
+@code {
+
+    [Parameter]
+    [EditorRequired]
+    public required string Title { get; set; }
+
+    [Parameter]
+    [EditorRequired]
+    public required string Note { get; set; }
+
+    [Parameter]
+    [EditorRequired]
+    public required RenderFragment ChildContent { get; set; }
+
+}

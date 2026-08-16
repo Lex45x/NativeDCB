@@ -1,0 +1,548 @@
+syntax = "proto3";
+
+package nativedcb.v1;
+
+option csharp_namespace = "NativeDCB.Protocol.V1";
+
+import "google/protobuf/timestamp.proto";
+
+// DatabaseService exposes database discovery, lifecycle, and server capabilities.
+service DatabaseService {
+  rpc ListDatabases(ListDatabasesRequest) returns (ListDatabasesResponse);
+  rpc CreateDatabase(CreateDatabaseRequest) returns (CreateDatabaseResponse);
+  rpc GetDatabaseInfo(GetDatabaseInfoRequest) returns (GetDatabaseInfoResponse);
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+  rpc GetHead(GetHeadRequest) returns (GetHeadResponse);
+}
+
+// CatalogService manages the current schemas and NDL handlers of a database.
+service CatalogService {
+  rpc RegisterEventSchema(RegisterSchemaRequest) returns (RegisterSchemaResponse);
+  rpc RegisterCommandSchema(RegisterSchemaRequest) returns (RegisterSchemaResponse);
+  rpc RemoveSchema(RemoveSchemaRequest) returns (RemoveSchemaResponse);
+  rpc RegisterHandler(RegisterHandlerRequest) returns (RegisterHandlerResponse);
+  rpc RemoveHandler(RemoveHandlerRequest) returns (RemoveHandlerResponse);
+  rpc GetHandler(GetHandlerRequest) returns (GetHandlerResponse);
+  rpc ListHandlers(ListHandlersRequest) returns (ListHandlersResponse);
+  rpc ValidateNdl(ValidateNdlRequest) returns (ValidateNdlResponse);
+}
+
+// CommandService executes registered handlers and reconciles committed commands.
+service CommandService {
+  rpc ExecuteHandler(ExecuteHandlerRequest) returns (ExecuteHandlerResponse);
+  rpc GetEventsByCommandId(GetEventsByCommandIdRequest) returns (GetEventsByCommandIdResponse);
+}
+
+// EventService reads and subscribes to globally ordered committed events.
+service EventService {
+  rpc ReadEventsByRange(ReadEventsByRangeRequest) returns (stream EventEnvelope);
+  rpc ReadEventsByQuery(ReadEventsByQueryRequest) returns (stream EventEnvelope);
+  rpc ReadEventsByTypeAndKeys(ReadEventsByTypeAndKeysRequest) returns (stream EventEnvelope);
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream EventEnvelope);
+}
+
+// StatementService compiles and executes arbitrary NDL statements.
+service StatementService {
+  rpc ExecuteStatement(ExecuteStatementRequest) returns (stream StatementResult);
+  rpc ExplainStatement(ExplainStatementRequest) returns (ExplainStatementResponse);
+}
+
+// AdministrationService exposes read-mostly storage status and rebuild requests.
+service AdministrationService {
+  rpc ListPartitions(ListPartitionsRequest) returns (ListPartitionsResponse);
+  rpc ListIndexes(ListIndexesRequest) returns (ListIndexesResponse);
+  rpc GetStateFileStatus(GetStateFileStatusRequest) returns (GetStateFileStatusResponse);
+  rpc RequestIndexRebuild(RequestIndexRebuildRequest) returns (RebuildResponse);
+  rpc RequestStateRebuild(RequestStateRebuildRequest) returns (RebuildResponse);
+}
+
+message KeyValue {
+  string key = 1;
+  string value = 2;
+}
+
+message EventEnvelope {
+  int64 event_id = 1;
+  string type = 2;
+  uint32 schema_version = 3;
+  repeated KeyValue keys = 4;
+  bytes data_json = 5;
+  google.protobuf.Timestamp timestamp_utc = 6;
+  string command_id = 7;
+  string command_type = 8;
+}
+
+message Query {
+  repeated QueryItem items = 1;
+}
+
+message QueryItem {
+  repeated string event_types = 1;
+  repeated KeyValue keys = 2;
+}
+
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_INFO = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_ERROR = 3;
+}
+
+message SourcePosition {
+  uint32 line = 1;
+  uint32 column = 2;
+  uint32 offset = 3;
+}
+
+message SourceSpan {
+  SourcePosition start = 1;
+  SourcePosition end = 2;
+}
+
+message Diagnostic {
+  string code = 1;
+  DiagnosticSeverity severity = 2;
+  string message = 3;
+  SourceSpan source_span = 4;
+}
+
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  bytes details_json = 3;
+}
+
+enum DatabaseState {
+  DATABASE_STATE_UNSPECIFIED = 0;
+  DATABASE_STATE_DISCOVERED = 1;
+  DATABASE_STATE_ACQUIRING_LOCK = 2;
+  DATABASE_STATE_RECOVERING = 3;
+  DATABASE_STATE_READY = 4;
+  DATABASE_STATE_DRAINING = 5;
+  DATABASE_STATE_STOPPED = 6;
+  DATABASE_STATE_FAULTED = 7;
+}
+
+message DatabaseSummary {
+  string database = 1;
+  DatabaseState state = 2;
+  int64 main_head = 3;
+  bool read_available = 4;
+  bool write_available = 5;
+  ErrorDetail fault = 6;
+}
+
+message ListDatabasesRequest {}
+
+message ListDatabasesResponse {
+  repeated DatabaseSummary databases = 1;
+}
+
+message CreateDatabaseRequest {
+  string database = 1;
+}
+
+message CreateDatabaseResponse {
+  DatabaseInfo database = 1;
+}
+
+message GetDatabaseInfoRequest {
+  string database = 1;
+}
+
+message GetDatabaseInfoResponse {
+  DatabaseInfo database = 1;
+}
+
+message DatabaseInfo {
+  string database = 1;
+  DatabaseState state = 2;
+  string database_version = 3;
+  string file_format_version = 4;
+  int64 main_head = 5;
+  uint32 active_partition_index = 6;
+  bool writer_lock_owned = 7;
+  repeated CatalogFingerprint catalog_fingerprints = 8;
+  bool read_available = 9;
+  bool write_available = 10;
+  ErrorDetail last_fault = 11;
+}
+
+message CatalogFingerprint {
+  string kind = 1;
+  string name = 2;
+  string fingerprint = 3;
+}
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  bool live = 1;
+  repeated DatabaseHealth databases = 2;
+}
+
+message DatabaseHealth {
+  string database = 1;
+  DatabaseState state = 2;
+  bool live = 3;
+  bool read_ready = 4;
+  bool write_ready = 5;
+  ErrorDetail fault = 6;
+}
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  string protocol_version = 1;
+  string ndl_version = 2;
+  repeated string file_format_versions = 3;
+  repeated string query_features = 4;
+  bool subscriptions_supported = 5;
+  map<string, uint64> limits = 6;
+}
+
+message GetHeadRequest {
+  string database = 1;
+}
+
+message GetHeadResponse {
+  int64 event_id = 1;
+}
+
+message RegisterSchemaRequest {
+  string database = 1;
+  string schema_name = 2;
+  bytes schema_document_json = 3;
+  bool allow_incompatible = 4;
+}
+
+message RegisterSchemaResponse {
+  string fingerprint = 1;
+  repeated Diagnostic diagnostics = 2;
+}
+
+enum SchemaKind {
+  SCHEMA_KIND_UNSPECIFIED = 0;
+  SCHEMA_KIND_EVENT = 1;
+  SCHEMA_KIND_COMMAND = 2;
+}
+
+message RemoveSchemaRequest {
+  string database = 1;
+  string schema_name = 2;
+  SchemaKind schema_kind = 3;
+}
+
+message RemoveSchemaResponse {
+  string removed_fingerprint = 1;
+}
+
+message RegisterHandlerRequest {
+  string database = 1;
+  string handler_name = 2;
+  string command_type = 3;
+  string ndl_source = 4;
+  bool allow_incompatible = 5;
+  bytes plan_json = 6;
+}
+
+message RegisterHandlerResponse {
+  HandlerDescription handler = 1;
+}
+
+message RemoveHandlerRequest {
+  string database = 1;
+  string handler_name = 2;
+}
+
+message RemoveHandlerResponse {
+  string removed_source_fingerprint = 1;
+  string removed_plan_fingerprint = 2;
+}
+
+message GetHandlerRequest {
+  string database = 1;
+  string handler_name = 2;
+}
+
+message GetHandlerResponse {
+  HandlerDescription handler = 1;
+}
+
+message ListHandlersRequest {
+  string database = 1;
+}
+
+message ListHandlersResponse {
+  repeated HandlerSummary handlers = 1;
+}
+
+message HandlerDescription {
+  string handler_name = 1;
+  string command_type = 2;
+  string ndl_source = 3;
+  string source_fingerprint = 4;
+  string plan_fingerprint = 5;
+  bool valid = 6;
+  repeated Diagnostic diagnostics = 7;
+}
+
+message HandlerSummary {
+  string handler_name = 1;
+  string command_type = 2;
+  string source_fingerprint = 3;
+  string plan_fingerprint = 4;
+  bool valid = 5;
+}
+
+message TransientSchema {
+  SchemaKind schema_kind = 1;
+  string schema_name = 2;
+  bytes schema_document_json = 3;
+}
+
+message ValidateNdlRequest {
+  string database = 1;
+  string ndl_source = 2;
+  repeated TransientSchema transient_schemas = 3;
+}
+
+message ValidateNdlResponse {
+  bool valid = 1;
+  repeated Diagnostic diagnostics = 2;
+  PlanSummary plan = 3;
+}
+
+message PlanSummary {
+  string plan_fingerprint = 1;
+  string redacted_summary = 2;
+  repeated string operations = 3;
+}
+
+message ExecuteHandlerRequest {
+  string database = 1;
+  string handler_name = 2;
+  optional string command_id = 3;
+  bytes command_json = 4;
+}
+
+message ExecuteHandlerResponse {
+  string command_id = 1;
+  string command_type = 2;
+  oneof outcome {
+    Committed committed = 3;
+    Rejected rejected = 4;
+    AlreadyCommitted already_committed = 5;
+    CommandFailed failed = 6;
+  }
+}
+
+message Committed {
+  int64 first_event_id = 1;
+  int64 last_event_id = 2;
+  repeated EventEnvelope events = 3;
+}
+
+message Rejected {
+  string code = 1;
+  string message = 2;
+  bytes details_json = 3;
+}
+
+message AlreadyCommitted {
+  int64 first_event_id = 1;
+  int64 last_event_id = 2;
+}
+
+message CommandFailed {
+  ErrorDetail error = 1;
+}
+
+message GetEventsByCommandIdRequest {
+  string database = 1;
+  string command_id = 2;
+}
+
+message GetEventsByCommandIdResponse {
+  repeated EventEnvelope events = 1;
+}
+
+enum ReadMode {
+  READ_MODE_UNSPECIFIED = 0;
+  READ_MODE_SNAPSHOT = 1;
+  READ_MODE_FOLLOW = 2;
+}
+
+enum QueryConsistency {
+  QUERY_CONSISTENCY_UNSPECIFIED = 0;
+  QUERY_CONSISTENCY_EVENTUAL_INDEX = 1;
+  QUERY_CONSISTENCY_COMMITTED_SCAN = 2;
+}
+
+message ReadEventsByRangeRequest {
+  string database = 1;
+  int64 after_event_id = 2;
+  optional int64 through_event_id = 3;
+  optional uint32 limit = 4;
+  ReadMode mode = 5;
+}
+
+message ReadEventsByQueryRequest {
+  string database = 1;
+  Query query = 2;
+  int64 after_event_id = 3;
+  optional int64 through_event_id = 4;
+  optional uint32 limit = 5;
+  QueryConsistency consistency = 6;
+}
+
+message ReadEventsByTypeAndKeysRequest {
+  string database = 1;
+  string event_type = 2;
+  repeated KeyValue keys = 3;
+  int64 after_event_id = 4;
+  optional int64 through_event_id = 5;
+  optional uint32 limit = 6;
+  QueryConsistency consistency = 7;
+}
+
+message SubscribeEventsRequest {
+  string database = 1;
+  int64 after_event_id = 2;
+  Query query = 3;
+  repeated KeyValue keys = 4;
+}
+
+message ExecuteStatementRequest {
+  string database = 1;
+  string ndl_source = 2;
+  bool allow_incompatible = 3;
+}
+
+message StatementResult {
+  uint32 statement_index = 1;
+  oneof result {
+    EventEnvelope event = 2;
+    ExecuteHandlerResponse command = 3;
+    RegistrationResult registration = 4;
+    DiagnosticBatch diagnostics = 5;
+    StatementCompletion completion = 6;
+  }
+}
+
+message RegistrationResult {
+  string kind = 1;
+  string name = 2;
+  string source_fingerprint = 3;
+  string plan_fingerprint = 4;
+  repeated Diagnostic diagnostics = 5;
+}
+
+message DiagnosticBatch {
+  repeated Diagnostic diagnostics = 1;
+}
+
+message StatementCompletion {
+  bool succeeded = 1;
+  string summary = 2;
+}
+
+message ExplainStatementRequest {
+  string database = 1;
+  string ndl_source = 2;
+}
+
+message ExplainStatementResponse {
+  bool valid = 1;
+  repeated Diagnostic diagnostics = 2;
+  repeated InferredSchema inferred_schemas = 3;
+  repeated Query query_templates = 4;
+  PlanSummary plan = 5;
+}
+
+message InferredSchema {
+  string name = 1;
+  SchemaKind schema_kind = 2;
+  bytes schema_document_json = 3;
+}
+
+message ListPartitionsRequest {
+  string database = 1;
+}
+
+message ListPartitionsResponse {
+  repeated PartitionStatus partitions = 1;
+}
+
+message PartitionStatus {
+  uint32 partition_number = 1;
+  string filename = 2;
+  bool active = 3;
+  int64 first_event_id = 4;
+  int64 last_event_id = 5;
+  uint64 event_count = 6;
+  StateFileStatus state_file = 7;
+}
+
+message ListIndexesRequest {
+  string database = 1;
+}
+
+message ListIndexesResponse {
+  repeated IndexStatus indexes = 1;
+}
+
+message IndexStatus {
+  string event_type = 1;
+  repeated KeyValue keys = 2;
+  string filename = 3;
+  int64 index_head = 4;
+  int64 main_head = 5;
+  uint64 lag = 6;
+  HydrationState hydration_state = 7;
+  ErrorDetail last_fault = 8;
+}
+
+enum HydrationState {
+  HYDRATION_STATE_UNSPECIFIED = 0;
+  HYDRATION_STATE_PENDING = 1;
+  HYDRATION_STATE_HYDRATING = 2;
+  HYDRATION_STATE_READY = 3;
+  HYDRATION_STATE_FAULTED = 4;
+}
+
+message GetStateFileStatusRequest {
+  string database = 1;
+  uint32 partition_number = 2;
+}
+
+message GetStateFileStatusResponse {
+  StateFileStatus status = 1;
+}
+
+message StateFileStatus {
+  bool present = 1;
+  bool locked = 2;
+  bool building = 3;
+  bool json_valid = 4;
+  bool schema_valid = 5;
+  uint32 source_partition = 6;
+  ErrorDetail last_build_error = 7;
+}
+
+message RequestIndexRebuildRequest {
+  string database = 1;
+  string event_type = 2;
+  repeated KeyValue keys = 3;
+}
+
+message RequestStateRebuildRequest {
+  string database = 1;
+  uint32 partition_number = 2;
+}
+
+message RebuildResponse {
+  bool accepted = 1;
+  string message = 2;
+}

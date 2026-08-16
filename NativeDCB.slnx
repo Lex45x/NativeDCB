@@ -1,0 +1,26 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NativeDCB.Engine/NativeDCB.Engine.csproj" />
+    <Project Path="src/NativeDCB.Cli/NativeDCB.Cli.csproj" />
+    <Project Path="src/NativeDCB.Model/NativeDCB.Model.csproj" />
+    <Project Path="src/NativeDCB.Ndl/NativeDCB.Ndl.csproj" />
+    <Project Path="src/NativeDCB.Protocol/NativeDCB.Protocol.csproj" />
+    <Project Path="src/NativeDCB.Sdk/NativeDCB.Sdk.csproj" />
+    <Project Path="src/NativeDCB.Sdk.Analyzers/NativeDCB.Sdk.Analyzers.csproj" />
+    <Project Path="src/NativeDCB.Sdk.Generators/NativeDCB.Sdk.Generators.csproj" />
+    <Project Path="src/NativeDCB.Server/NativeDCB.Server.csproj" />
+    <Project Path="src/NativeDCB.Web/NativeDCB.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NativeDCB.Engine.Tests/NativeDCB.Engine.Tests.csproj" />
+    <Project Path="tests/NativeDCB.Ndl.Tests/NativeDCB.Ndl.Tests.csproj" />
+    <Project Path="tests/NativeDCB.Sdk.Tests/NativeDCB.Sdk.Tests.csproj" />
+    <Project Path="tests/NativeDCB.Sdk.Analyzers.Tests/NativeDCB.Sdk.Analyzers.Tests.csproj" />
+    <Project Path="tests/NativeDCB.Sdk.Generators.Tests/NativeDCB.Sdk.Generators.Tests.csproj" />
+    <Project Path="tests/NativeDCB.Server.IntegrationTests/NativeDCB.Server.IntegrationTests.csproj" />
+    <Project Path="tests/NativeDCB.EndToEndTests/NativeDCB.EndToEndTests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/CourseSubscriptions/CourseSubscriptions.csproj" />
+  </Folder>
+</Solution>

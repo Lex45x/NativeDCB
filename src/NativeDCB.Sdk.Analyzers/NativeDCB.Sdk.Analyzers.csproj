@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <PackageId>NativeDCB.Sdk.Analyzers</PackageId>
+    <Description>Compile-time schema diagnostics for NativeDCB .NET event declarations.</Description>
+    <Authors>NativeDCB</Authors>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(OutputPath)$(AssemblyName).dll"
+          Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+</Project>
