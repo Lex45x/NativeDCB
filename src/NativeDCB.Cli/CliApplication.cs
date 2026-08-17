@@ -165,6 +165,23 @@ internal static class CliApplication
                         SchemaName = arguments.Required("name"),
                         SchemaKind = ParseSchemaKind(arguments.Required("kind"))
                     }, cancellationToken: cancellationToken));
+            case "catalog get-schema":
+                arguments.EnsureAllowed("database", "name", "kind");
+                return await UnaryAsync(catalog.GetSchemaAsync(
+                    new GetSchemaRequest
+                    {
+                        Database = arguments.Required("database"),
+                        SchemaName = arguments.Required("name"),
+                        SchemaKind = ParseSchemaKind(arguments.Required("kind"))
+                    }, cancellationToken: cancellationToken));
+            case "catalog list-schemas":
+                arguments.EnsureAllowed("database", "kind");
+                return await UnaryAsync(catalog.ListSchemasAsync(
+                    new ListSchemasRequest
+                    {
+                        Database = arguments.Required("database"),
+                        SchemaKind = ParseOptionalSchemaKind(arguments.Optional("kind"))
+                    }, cancellationToken: cancellationToken));
             case "catalog register-handler":
                 arguments.EnsureAllowed(
                     "database", "name", "command-type", "source", "source-file", "source-stdin",
@@ -185,14 +202,18 @@ internal static class CliApplication
                 return await UnaryAsync(catalog.RemoveHandlerAsync(
                     new RemoveHandlerRequest
                     {
-                        Database = arguments.Required("database"), HandlerName = arguments.Required("name")
+                        Database = arguments.Required("database"),
+                        HandlerName = arguments.Required("name")
                     }, cancellationToken: cancellationToken));
             case "catalog get-handler":
-                arguments.EnsureAllowed("database", "name");
+                arguments.EnsureAllowed("database", "name", "include-plan", "generate-ndl");
                 return await UnaryAsync(catalog.GetHandlerAsync(
                     new GetHandlerRequest
                     {
-                        Database = arguments.Required("database"), HandlerName = arguments.Required("name")
+                        Database = arguments.Required("database"),
+                        HandlerName = arguments.Required("name"),
+                        IncludePlanJson = arguments.Flag("include-plan"),
+                        GenerateNdl = arguments.Flag("generate-ndl")
                     }, cancellationToken: cancellationToken));
             case "catalog list-handlers":
                 arguments.EnsureAllowed("database");
@@ -236,7 +257,8 @@ internal static class CliApplication
                 return await UnaryAsync(commands.GetEventsByCommandIdAsync(
                     new GetEventsByCommandIdRequest
                     {
-                        Database = arguments.Required("database"), CommandId = arguments.Required("command-id")
+                        Database = arguments.Required("database"),
+                        CommandId = arguments.Required("command-id")
                     }, cancellationToken: cancellationToken));
             case "event read-range":
                 arguments.EnsureAllowed("database", "after", "through", "limit", "mode");
@@ -342,7 +364,8 @@ internal static class CliApplication
                 arguments.EnsureAllowed("database", "event-type", "key");
                 RequestIndexRebuildRequest indexRequest = new()
                 {
-                    Database = arguments.Required("database"), EventType = arguments.Required("event-type")
+                    Database = arguments.Required("database"),
+                    EventType = arguments.Required("event-type")
                 };
                 indexRequest.Keys.AddRange(InputReader.ParseKeys(arguments.Many("key")));
                 return await UnaryAsync(
@@ -504,6 +527,11 @@ internal static class CliApplication
             "command" => SchemaKind.Command,
             _ => throw new CliUsageException("Option --kind must be event or command.")
         };
+    }
+
+    private static SchemaKind ParseOptionalSchemaKind(string? value)
+    {
+        return value is null ? SchemaKind.Unspecified : ParseSchemaKind(value);
     }
 
     private static void ValidateServer(string server)

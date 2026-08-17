@@ -13,6 +13,8 @@ using Microsoft.Extensions.Configuration;
 using NativeDCB.Protocol.V1;
 using NativeDCB.Sdk;
 
+using DecisionPlan = NativeDCB.Model.DecisionPlan;
+
 namespace NativeDCB.Server.IntegrationTests;
 
 public sealed class NativeDcbServerTests : IAsyncLifetime
@@ -127,7 +129,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         ExplainStatementResponse explained = await statements.ExplainStatementAsync(new ExplainStatementRequest
         {
-            Database = "school", NdlSource = SubscribeNdl
+            Database = "school",
+            NdlSource = SubscribeNdl
         });
         Assert.True(explained.Valid);
         Assert.Contains("emit:1", explained.Plan.Operations);
@@ -191,7 +194,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         GetHandlerResponse retained = await catalog.GetHandlerAsync(new GetHandlerRequest
         {
-            Database = "school", HandlerName = "SubscribeStudent"
+            Database = "school",
+            HandlerName = "SubscribeStudent"
         });
         Assert.Equal(subscribe.Handler.SourceFingerprint, retained.Handler.SourceFingerprint);
 
@@ -204,9 +208,15 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         CatalogService.CatalogServiceClient reopenedCatalog = new(_channel);
         GetHandlerResponse reopened = await reopenedCatalog.GetHandlerAsync(new GetHandlerRequest
         {
-            Database = "school", HandlerName = "SubscribeStudent"
+            Database = "school",
+            HandlerName = "SubscribeStudent",
+            IncludePlanJson = true,
+            GenerateNdl = true
         });
         Assert.Equal(subscribe.Handler.SourceFingerprint, reopened.Handler.SourceFingerprint);
+        Assert.NotEmpty(reopened.Handler.PlanJson);
+        Assert.StartsWith("decision SubscribeStudentToCourse", reopened.Handler.GeneratedNdl,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -261,7 +271,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         RpcException missing = await Assert.ThrowsAsync<RpcException>(async () =>
             await commands.GetEventsByCommandIdAsync(new GetEventsByCommandIdRequest
             {
-                Database = "empty", CommandId = Guid.NewGuid().ToString("D")
+                Database = "empty",
+                CommandId = Guid.NewGuid().ToString("D")
             }));
         Assert.Equal(StatusCode.NotFound, missing.StatusCode);
         AssertErrorDetail(missing, "NotFound");
@@ -315,7 +326,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
             committed.Failed?.Error?.Message);
         await catalog.RemoveHandlerAsync(new RemoveHandlerRequest
         {
-            Database = "school", HandlerName = "DefineCourse"
+            Database = "school",
+            HandlerName = "DefineCourse"
         });
 
         ExecuteHandlerResponse duplicate = await commands.ExecuteHandlerAsync(new ExecuteHandlerRequest
@@ -371,7 +383,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         RebuildResponse rebuild = await administration.RequestStateRebuildAsync(new RequestStateRebuildRequest
         {
-            Database = "school", PartitionNumber = 1
+            Database = "school",
+            PartitionNumber = 1
         });
         Assert.True(rebuild.Accepted);
     }
@@ -435,7 +448,10 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         await RegisterAsync(catalog, "DefineCourse", "DefineCourse", CreateCourseNdl);
         using AsyncServerStreamingCall<EventEnvelope> follow = events.ReadEventsByRange(new ReadEventsByRangeRequest
         {
-            Database = "school", AfterEventId = 0, Mode = ReadMode.Follow, Limit = 1
+            Database = "school",
+            AfterEventId = 0,
+            Mode = ReadMode.Follow,
+            Limit = 1
         });
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(seconds: 10));
         Task<bool> moved = follow.ResponseStream.MoveNext(timeout.Token);
@@ -488,11 +504,14 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         ReadEventsByQueryRequest eventualRequest = new()
         {
-            Database = "school", Consistency = QueryConsistency.EventualIndex, Query = new Query()
+            Database = "school",
+            Consistency = QueryConsistency.EventualIndex,
+            Query = new Query()
         };
         eventualRequest.Query.Items.Add(new QueryItem
         {
-            EventTypes = { "CourseDefined" }, Keys = { new KeyValue { Key = "CourseId", Value = "course-1" } }
+            EventTypes = { "CourseDefined" },
+            Keys = { new KeyValue { Key = "CourseId", Value = "course-1" } }
         });
         IReadOnlyList<EventEnvelope> indexedEvents = await ReadAllAsync(
             events.ReadEventsByQuery(eventualRequest).ResponseStream);
@@ -552,6 +571,36 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
             SchemaName = "CourseDefined",
             SchemaDocumentJson = ByteString.CopyFromUtf8(eventSchema)
         });
+        ListSchemasResponse schemas = await catalog.ListSchemasAsync(new ListSchemasRequest { Database = "school" });
+        Assert.Equal(
+            [(SchemaKind.Event, "CourseDefined"), (SchemaKind.Command, "DefineCourse")],
+            schemas.Schemas.Select(value => (value.SchemaKind, value.SchemaName)));
+        Assert.All(schemas.Schemas, value => Assert.NotEmpty(value.Fingerprint));
+
+        ListSchemasResponse commandSchemas = await catalog.ListSchemasAsync(new ListSchemasRequest
+        {
+            Database = "school",
+            SchemaKind = SchemaKind.Command
+        });
+        Assert.Equal("DefineCourse", Assert.Single(commandSchemas.Schemas).SchemaName);
+
+        GetSchemaResponse inspectedSchema = await catalog.GetSchemaAsync(new GetSchemaRequest
+        {
+            Database = "school",
+            SchemaName = "CourseDefined",
+            SchemaKind = SchemaKind.Event
+        });
+        Assert.Equal(eventSchema, inspectedSchema.Schema.SchemaDocumentJson.ToStringUtf8());
+        Assert.Equal(schemas.Schemas[index: 0].Fingerprint, inspectedSchema.Schema.Fingerprint);
+        RpcException missingSchema = await Assert.ThrowsAsync<RpcException>(async () =>
+            await catalog.GetSchemaAsync(new GetSchemaRequest
+            {
+                Database = "school",
+                SchemaName = "Missing",
+                SchemaKind = SchemaKind.Event
+            }));
+        Assert.Equal(StatusCode.NotFound, missingSchema.StatusCode);
+
         RegisterHandlerResponse handler = await RegisterAsync(
             catalog, "DefineCourse", "DefineCourse", CreateCourseNdl);
         Assert.True(handler.Handler.Valid);
@@ -642,6 +691,39 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         Assert.True(registration.Handler.Valid);
         Assert.Empty(registration.Handler.NdlSource);
 
+        GetHandlerResponse inspected = await sdk.GetHandlerAsync(
+            "school", "SubscribeStudentSdk", includePlanJson: true, generateNdl: true);
+        Assert.NotEmpty(inspected.Handler.PlanJson);
+        using (JsonDocument plan = JsonDocument.Parse(inspected.Handler.PlanJson.Memory))
+        {
+            Assert.Equal("SubscribeStudentSdk", plan.RootElement.GetProperty("name").GetString());
+        }
+
+        Assert.StartsWith("decision SubscribeStudentSdk", inspected.Handler.GeneratedNdl, StringComparison.Ordinal);
+        Assert.Empty(inspected.Handler.NdlGenerationDiagnostics);
+
+        DecisionPlan unrepresentable = definition.Compile("Unrepresentable") with
+        {
+            CommandSchema = "subscribe-command"
+        };
+        RegisterHandlerResponse directRegistration = await catalog.RegisterHandlerAsync(new RegisterHandlerRequest
+        {
+            Database = "school",
+            HandlerName = "Unrepresentable",
+            CommandType = unrepresentable.CommandSchema,
+            PlanJson = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes(
+                unrepresentable, new JsonSerializerOptions(JsonSerializerDefaults.Web)))
+        });
+        Assert.True(directRegistration.Handler.Valid);
+        GetHandlerResponse failedGeneration = await catalog.GetHandlerAsync(new GetHandlerRequest
+        {
+            Database = "school",
+            HandlerName = "Unrepresentable",
+            GenerateNdl = true
+        });
+        Assert.Empty(failedGeneration.Handler.GeneratedNdl);
+        Assert.Equal("NDL3001", Assert.Single(failedGeneration.Handler.NdlGenerationDiagnostics).Code);
+
         ExecuteHandlerResponse result = await sdk.ExecuteHandlerAsync(
             "school", "SubscribeStudentSdk", command, Guid.NewGuid());
         Assert.Equal(ExecuteHandlerResponse.OutcomeOneofCase.Committed, result.OutcomeCase);
@@ -710,7 +792,10 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
     {
         return await client.RegisterHandlerAsync(new RegisterHandlerRequest
         {
-            Database = "school", HandlerName = name, CommandType = commandType, NdlSource = source
+            Database = "school",
+            HandlerName = name,
+            CommandType = commandType,
+            NdlSource = source
         });
     }
 
@@ -763,7 +848,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
-                    ["DatabaseRoot"] = DatabaseRoot, ["MaxEventCountPerPartition"] = "3"
+                    ["DatabaseRoot"] = DatabaseRoot,
+                    ["MaxEventCountPerPartition"] = "3"
                 }));
         }
 

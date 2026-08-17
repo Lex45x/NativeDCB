@@ -122,6 +122,8 @@ Emission order is batch order. A registered event schema checks required/types/a
 
 The request's `handler_name` is the catalog key. The compiled decision's name is not currently required to equal that handler name. At execution the stored compiled plan is authoritative; source is retained for inspection and reparsing helpers.
 
+`CatalogService.GetHandler` can optionally return that authoritative plan JSON and ask the NDL library for canonical generated NDL. Generated text is kept separate from original source. Conversion fails with diagnostics rather than changing behavior when a stored plan uses constructs that NDL cannot represent, including invalid NDL names or key bindings that differ from those derivable from its `where` expression.
+
 ### NDL statement execution
 
 `StatementService.ExplainStatement` and `ExecuteStatement` validate every decision individually and reject duplicate decision names. Execute compiles valid decisions, canonicalizes each to standalone source, and persists all of them under their decision names with one catalog save; if any decision is invalid, none are published. It is a handler-registration statement path only. It does not read events, execute a command, register schemas, or perform administration.

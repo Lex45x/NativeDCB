@@ -18,11 +18,17 @@ public interface INativeDcbConsole
     Task<string> RemoveSchemaAsync(string database, string name, string kind,
         CancellationToken cancellationToken = default);
 
+    Task<string> GetSchemaAsync(string database, string name, string kind,
+        CancellationToken cancellationToken = default);
+
+    Task<string> ListSchemasAsync(string database, string kind, CancellationToken cancellationToken = default);
+
     Task<string> RegisterHandlerAsync(string database, string name, string commandType, string ndlSource,
         string planJson, bool allowIncompatible, CancellationToken cancellationToken = default);
 
     Task<string> RemoveHandlerAsync(string database, string name, CancellationToken cancellationToken = default);
-    Task<string> GetHandlerAsync(string database, string name, CancellationToken cancellationToken = default);
+    Task<string> GetHandlerAsync(string database, string name, bool includePlanJson, bool generateNdl,
+        CancellationToken cancellationToken = default);
     Task<string> ListHandlersAsync(string database, CancellationToken cancellationToken = default);
 
     Task<string> ValidateNdlAsync(string database, string ndlSource, string transientSchemasJson,

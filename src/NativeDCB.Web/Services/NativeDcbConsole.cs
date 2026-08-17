@@ -97,17 +97,43 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         string kind,
         CancellationToken cancellationToken = default)
     {
-        SchemaKind schemaKind = kind.Equals("event", StringComparison.OrdinalIgnoreCase)
-            ? SchemaKind.Event
-            : kind.Equals("command", StringComparison.OrdinalIgnoreCase)
-                ? SchemaKind.Command
-                : throw new ArgumentException("Schema kind must be Event or Command.", nameof(kind));
+        SchemaKind schemaKind = ParseSchemaKind(kind, allowUnspecified: false);
         return UnaryAsync(_catalog.RemoveSchemaAsync(
             new RemoveSchemaRequest
             {
                 Database = Required(database, nameof(database)),
                 SchemaName = Required(name, nameof(name)),
                 SchemaKind = schemaKind
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public Task<string> GetSchemaAsync(
+        string database,
+        string name,
+        string kind,
+        CancellationToken cancellationToken = default)
+    {
+        return UnaryAsync(_catalog.GetSchemaAsync(
+            new GetSchemaRequest
+            {
+                Database = Required(database, nameof(database)),
+                SchemaName = Required(name, nameof(name)),
+                SchemaKind = ParseSchemaKind(kind, allowUnspecified: false)
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public Task<string> ListSchemasAsync(
+        string database,
+        string kind,
+        CancellationToken cancellationToken = default)
+    {
+        return UnaryAsync(_catalog.ListSchemasAsync(
+            new ListSchemasRequest
+            {
+                Database = Required(database, nameof(database)),
+                SchemaKind = ParseSchemaKind(kind, allowUnspecified: true)
             },
             cancellationToken: cancellationToken));
     }
@@ -152,17 +178,26 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_catalog.RemoveHandlerAsync(
             new RemoveHandlerRequest
             {
-                Database = Required(database, nameof(database)), HandlerName = Required(name, nameof(name))
+                Database = Required(database, nameof(database)),
+                HandlerName = Required(name, nameof(name))
             },
             cancellationToken: cancellationToken));
     }
 
-    public Task<string> GetHandlerAsync(string database, string name, CancellationToken cancellationToken = default)
+    public Task<string> GetHandlerAsync(
+        string database,
+        string name,
+        bool includePlanJson,
+        bool generateNdl,
+        CancellationToken cancellationToken = default)
     {
         return UnaryAsync(_catalog.GetHandlerAsync(
             new GetHandlerRequest
             {
-                Database = Required(database, nameof(database)), HandlerName = Required(name, nameof(name))
+                Database = Required(database, nameof(database)),
+                HandlerName = Required(name, nameof(name)),
+                IncludePlanJson = includePlanJson,
+                GenerateNdl = generateNdl
             },
             cancellationToken: cancellationToken));
     }
@@ -182,7 +217,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
     {
         ValidateNdlRequest request = new()
         {
-            Database = Required(database, nameof(database)), NdlSource = Required(ndlSource, nameof(ndlSource))
+            Database = Required(database, nameof(database)),
+            NdlSource = Required(ndlSource, nameof(ndlSource))
         };
         request.TransientSchemas.AddRange(ParseTransientSchemas(transientSchemasJson));
         return UnaryAsync(_catalog.ValidateNdlAsync(request, cancellationToken: cancellationToken));
@@ -219,7 +255,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_command.GetEventsByCommandIdAsync(
             new GetEventsByCommandIdRequest
             {
-                Database = Required(database, nameof(database)), CommandId = Required(commandId, nameof(commandId))
+                Database = Required(database, nameof(database)),
+                CommandId = Required(commandId, nameof(commandId))
             },
             cancellationToken: cancellationToken));
     }
@@ -328,7 +365,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_statement.ExplainStatementAsync(
             new ExplainStatementRequest
             {
-                Database = Required(database, nameof(database)), NdlSource = Required(ndlSource, nameof(ndlSource))
+                Database = Required(database, nameof(database)),
+                NdlSource = Required(ndlSource, nameof(ndlSource))
             },
             cancellationToken: cancellationToken));
     }
@@ -355,7 +393,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_administration.GetStateFileStatusAsync(
             new GetStateFileStatusRequest
             {
-                Database = Required(database, nameof(database)), PartitionNumber = partitionNumber
+                Database = Required(database, nameof(database)),
+                PartitionNumber = partitionNumber
             },
             cancellationToken: cancellationToken));
     }
@@ -368,7 +407,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
     {
         RequestIndexRebuildRequest request = new()
         {
-            Database = Required(database, nameof(database)), EventType = Required(eventType, nameof(eventType))
+            Database = Required(database, nameof(database)),
+            EventType = Required(eventType, nameof(eventType))
         };
         request.Keys.AddRange(ParseKeys(keys));
         return UnaryAsync(_administration.RequestIndexRebuildAsync(request, cancellationToken: cancellationToken));
@@ -382,7 +422,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_administration.RequestStateRebuildAsync(
             new RequestStateRebuildRequest
             {
-                Database = Required(database, nameof(database)), PartitionNumber = partitionNumber
+                Database = Required(database, nameof(database)),
+                PartitionNumber = partitionNumber
             },
             cancellationToken: cancellationToken));
     }
@@ -551,6 +592,29 @@ public sealed class NativeDcbConsole : INativeDcbConsole
     private static QueryConsistency Consistency(bool committedScan)
     {
         return committedScan ? QueryConsistency.CommittedScan : QueryConsistency.EventualIndex;
+    }
+
+    private static SchemaKind ParseSchemaKind(string value, bool allowUnspecified)
+    {
+        if (value.Equals("event", StringComparison.OrdinalIgnoreCase))
+        {
+            return SchemaKind.Event;
+        }
+
+        if (value.Equals("command", StringComparison.OrdinalIgnoreCase))
+        {
+            return SchemaKind.Command;
+        }
+
+        if (allowUnspecified &&
+            (string.IsNullOrWhiteSpace(value) || value.Equals("all", StringComparison.OrdinalIgnoreCase)))
+        {
+            return SchemaKind.Unspecified;
+        }
+
+        throw new ArgumentException(
+            allowUnspecified ? "Schema kind must be All, Event, or Command." : "Schema kind must be Event or Command.",
+            nameof(value));
     }
 
     private static ByteString JsonBytes(string value, string parameterName)

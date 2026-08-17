@@ -129,6 +129,22 @@ internal static class ProtocolMapper
         };
     }
 
+    public static SchemaDescription ToSchema(SchemaCatalogEntry value, SchemaKind kind)
+    {
+        return new SchemaDescription
+        {
+            SchemaName = value.Name,
+            SchemaKind = kind,
+            Fingerprint = value.Fingerprint,
+            SchemaDocumentJson = ByteString.CopyFromUtf8(value.DocumentJson)
+        };
+    }
+
+    public static SchemaSummary ToSchemaSummary(SchemaCatalogEntry value, SchemaKind kind)
+    {
+        return new SchemaSummary { SchemaName = value.Name, SchemaKind = kind, Fingerprint = value.Fingerprint };
+    }
+
     public static HandlerSummary ToHandlerSummary(HandlerCatalogEntry value)
     {
         return new HandlerSummary
@@ -154,7 +170,8 @@ internal static class ProtocolMapper
             Message = value.Message,
             SourceSpan = new SourceSpan
             {
-                Start = Position(start, value.Span.Start), End = Position(end, value.Span.End)
+                Start = Position(start, value.Span.Start),
+                End = Position(end, value.Span.End)
             }
         };
     }

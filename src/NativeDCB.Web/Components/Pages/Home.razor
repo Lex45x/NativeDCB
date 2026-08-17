@@ -57,12 +57,12 @@
 
 <div class="workbench">
 <nav class="service-rail" aria-label="Protocol services">
-    @foreach (var tab in Enum.GetValues<ServiceTab>())
+    @foreach (var service in RpcCatalog.Services)
     {
-        <button class="service-tab @(activeTab == tab ? "active" : null)" @onclick="() => activeTab = tab">
-            <span>@TabNumber(tab)</span>
-            <strong>@TabName(tab)</strong>
-            <small>@RpcCount(tab) RPC</small>
+        <button class="service-tab @(activeService == service ? "active" : null)" @onclick="() => activeService = service">
+            <span>@service.Ordinal.ToString("D2")</span>
+            <strong>@service.Name</strong>
+            <small>@service.Methods.Count RPC</small>
         </button>
     }
 </nav>
@@ -71,12 +71,27 @@
 <div class="service-heading">
     <div>
         <span class="eyebrow">nativedcb.v1</span>
-        <h2>@TabName(activeTab)Service</h2>
+        <h2>@activeService.Name Service</h2>
     </div>
-    <span class="rpc-total">@RpcCount(activeTab).ToString("D2") methods</span>
+    <span class="rpc-total">@activeService.Methods.Count.ToString("D2") methods</span>
 </div>
 
-@if (activeTab == ServiceTab.Database)
+<div class="rpc-schema-strip" aria-label="Methods discovered from the protobuf schema">
+    @foreach (var method in activeService.Methods)
+    {
+        <span title="@($"{method.InputType} -> {method.OutputType}")">@method.Name@(method.ClientStreaming ? " / client stream" : null)@(method.ServerStreaming ? " / server stream" : null)</span>
+    }
+</div>
+
+@if (RpcCatalog.MissingConsoleMethods.Count > 0)
+{
+    <div class="transport-error">
+        <span>protobuf coverage</span>
+        <strong>Missing Web wrappers: @string.Join(", ", RpcCatalog.MissingConsoleMethods.Select(method => method.FullName))</strong>
+    </div>
+}
+
+@if (activeService.Name == "Database")
 {
     <div class="rpc-grid">
         <RpcCard Title="ListDatabases" Note="Discover every database visible to the server.">
@@ -102,7 +117,7 @@
         </RpcCard>
     </div>
 }
-else if (activeTab == ServiceTab.Catalog)
+else if (activeService.Name == "Catalog")
 {
     <div class="rpc-grid catalog-grid">
         <RpcCard Title="RegisterEventSchema / RegisterCommandSchema" Note="Send an arbitrary JSON Schema document.">
@@ -134,6 +149,29 @@ else if (activeTab == ServiceTab.Catalog)
             </div>
             <button class="button button-danger" @onclick="RemoveSchemaAsync" disabled="@busy">Remove schema</button>
         </RpcCard>
+        <RpcCard Title="Schema introspection" Note="Inspect current schema summaries or retrieve one complete document.">
+            <div class="field-pair">
+                <label>
+                    <span>Schema name</span><input @bind="schemaName" @bind:event="oninput">
+                </label>
+                <label>
+                    <span>Get kind</span>
+                    <select @bind="schemaKind">
+                        <option>Event</option><option>Command</option>
+                    </select>
+                </label>
+            </div>
+            <label>
+                <span>List filter</span>
+                <select @bind="schemaFilter">
+                    <option>All</option><option>Event</option><option>Command</option>
+                </select>
+            </label>
+            <div class="button-row">
+                <button class="button" @onclick="GetSchemaAsync" disabled="@busy">GetSchema</button>
+                <button class="button button-run" @onclick="ListSchemasAsync" disabled="@busy">ListSchemas</button>
+            </div>
+        </RpcCard>
         <RpcCard Title="RegisterHandler" Note="Compile NDL source or install plan JSON. Provide exactly one.">
             <div class="field-pair">
                 <label>
@@ -157,6 +195,10 @@ else if (activeTab == ServiceTab.Catalog)
                 <span>Handler name</span><input @bind="handlerName" @bind:event="oninput" placeholder="place-order">
             </label>
             <div class="button-row">
+                <label class="check-control inline-check"><input type="checkbox" @bind="handlerIncludePlan">include plan JSON</label>
+                <label class="check-control inline-check"><input type="checkbox" @bind="handlerGenerateNdl">generate NDL</label>
+            </div>
+            <div class="button-row">
                 <button class="button button-danger" @onclick="RemoveHandlerAsync" disabled="@busy">RemoveHandler</button>
                 <button class="button" @onclick="GetHandlerAsync" disabled="@busy">GetHandler</button>
                 <button class="button button-run" @onclick="ListHandlersAsync" disabled="@busy">ListHandlers</button>
@@ -171,7 +213,7 @@ else if (activeTab == ServiceTab.Catalog)
         </RpcCard>
     </div>
 }
-else if (activeTab == ServiceTab.Command)
+else if (activeService.Name == "Command")
 {
     <div class="rpc-grid two-up">
         <RpcCard Title="ExecuteHandler" Note="Execute a registered handler with arbitrary command JSON.">
@@ -196,7 +238,7 @@ else if (activeTab == ServiceTab.Command)
         </RpcCard>
     </div>
 }
-else if (activeTab == ServiceTab.Event)
+else if (activeService.Name == "Event")
 {
     <div class="shared-range">
         <label>
@@ -249,7 +291,7 @@ else if (activeTab == ServiceTab.Event)
         </RpcCard>
     </div>
 }
-else if (activeTab == ServiceTab.Statement)
+else if (activeService.Name == "Statement")
 {
     <div class="statement-callout">
         <span class="eyebrow">shared NDL workspace</span>
@@ -261,7 +303,7 @@ else if (activeTab == ServiceTab.Statement)
         </div>
     </div>
 }
-else
+else if (activeService.Name == "Administration")
 {
     <div class="rpc-grid admin-grid">
         <RpcCard Title="ListPartitions" Note="Inspect partition ranges and embedded state status.">
@@ -291,6 +333,14 @@ else
             </label>
             <button class="button button-danger" @onclick="RequestStateRebuildAsync" disabled="@busy">Request rebuild</button>
         </RpcCard>
+    </div>
+}
+else
+{
+    <div class="statement-callout">
+        <span class="eyebrow">schema-discovered service</span>
+        <h3>No specialized workbench controls are available yet.</h3>
+        <p>The service and its methods were discovered from protobuf descriptors. Add matching methods to <code>INativeDcbConsole</code> to clear the coverage warning above.</p>
     </div>
 }
 </main>
@@ -350,7 +400,7 @@ else
 @code {
     private readonly List<OutputEntry> output = [];
     private CancellationTokenSource? operationSource;
-    private ServiceTab activeTab = ServiceTab.Database;
+    private RpcServiceMetadata activeService = RpcCatalog.Services[index: 0];
     private string database = "default";
     private string newDatabase = string.Empty;
     private string connectionStatus = "not contacted";
@@ -364,6 +414,7 @@ else
 
     private string schemaName = string.Empty;
     private string schemaKind = "Event";
+    private string schemaFilter = "All";
     private string schemaJson = "{\n  \"type\": \"object\",\n  \"properties\": {}\n}";
     private bool schemaAllowIncompatible;
     private string handlerName = string.Empty;
@@ -371,6 +422,8 @@ else
     private string handlerNdl = string.Empty;
     private string handlerPlanJson = string.Empty;
     private bool handlerAllowIncompatible;
+    private bool handlerIncludePlan;
+    private bool handlerGenerateNdl;
     private string transientSchemasJson = "[]";
 
     private string commandJson = "{\n  \"value\": null\n}";
@@ -447,6 +500,18 @@ else
             Console.RemoveSchemaAsync(database, schemaName, schemaKind, token));
     }
 
+    private Task GetSchemaAsync()
+    {
+        return RunUnaryAsync("Catalog.GetSchema", token =>
+            Console.GetSchemaAsync(database, schemaName, schemaKind, token));
+    }
+
+    private Task ListSchemasAsync()
+    {
+        return RunUnaryAsync("Catalog.ListSchemas", token =>
+            Console.ListSchemasAsync(database, schemaFilter, token));
+    }
+
     private Task RegisterHandlerAsync()
     {
         return RunUnaryAsync("Catalog.RegisterHandler", token =>
@@ -461,7 +526,8 @@ else
 
     private Task GetHandlerAsync()
     {
-        return RunUnaryAsync("Catalog.GetHandler", token => Console.GetHandlerAsync(database, handlerName, token));
+        return RunUnaryAsync("Catalog.GetHandler", token => Console.GetHandlerAsync(
+            database, handlerName, handlerIncludePlan, handlerGenerateNdl, token));
     }
 
     private Task ListHandlersAsync()
@@ -666,30 +732,6 @@ else
         operationCancelled = false;
     }
 
-    private static string TabNumber(ServiceTab tab)
-    {
-        return ((int)tab + 1).ToString("D2");
-    }
-
-    private static string TabName(ServiceTab tab)
-    {
-        return tab.ToString();
-    }
-
-    private static int RpcCount(ServiceTab tab)
-    {
-        return tab switch
-        {
-            ServiceTab.Database => 6,
-            ServiceTab.Catalog => 8,
-            ServiceTab.Command => 2,
-            ServiceTab.Event => 4,
-            ServiceTab.Statement => 2,
-            ServiceTab.Administration => 5,
-            _ => 0
-        };
-    }
-
     public void Dispose()
     {
         disposed = true;
@@ -699,15 +741,5 @@ else
     }
 
     private sealed record OutputEntry(int Sequence, string Rpc, DateTimeOffset Timestamp, string Json);
-
-    private enum ServiceTab
-    {
-        Database,
-        Catalog,
-        Command,
-        Event,
-        Statement,
-        Administration
-    }
 
 }

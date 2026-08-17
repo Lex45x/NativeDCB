@@ -121,7 +121,7 @@ A second process holding the same database's `store.lock` causes activation to f
 
 ## Catalog Lifecycle
 
-`catalog_v1.json` contains only current event schemas, command schemas, and handlers. Mutation takes a catalog semaphore, updates in-memory dictionaries, writes an indented `.tmp` catalog with write-through/durable flush, and moves it over the catalog. On save failure, the in-memory mutation is rolled back.
+`catalog_v1.json` contains only current event schemas, command schemas, and handlers. `ListSchemas`, `GetSchema`, `ListHandlers`, and `GetHandler` expose this current state; they are not historical or audit APIs. Mutation takes a catalog semaphore, updates in-memory dictionaries, writes an indented `.tmp` catalog with write-through/durable flush, and moves it over the catalog. On save failure, the in-memory mutation is rolled back.
 
 Schemas/handlers can be registered, replaced, and removed. No superseded versions, statement history, audit records, or caller identity are persisted. Handler execution receives a complete immutable actor request, so later catalog mutation does not change that command attempt or its conflict retries.
 

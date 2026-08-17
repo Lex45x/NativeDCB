@@ -1,6 +1,6 @@
 # NativeDCB CLI
 
-Status: implemented 27-RPC native gRPC client reference  
+Status: implemented 29-RPC native gRPC client reference
 Last verified: 2026-08-14
 
 ## Build And Run
@@ -20,7 +20,7 @@ dotnet run --project src\NativeDCB.Cli -- database list
 
 The built executable is named `nativedcb` (`nativedcb.exe` on Windows). Examples below use `dotnet run` so they do not depend on an installation or `PATH` entry.
 
-The CLI is a native gRPC client and covers all 27 RPCs in `nativedcb.v1`. Start `NativeDCB.Server` first. Its native HTTP/2 launch endpoint is `http://localhost:5010`; gRPC-Web is for browser clients and is not needed by the CLI.
+The CLI is a native gRPC client and covers all 29 RPCs in `nativedcb.v1`. Start `NativeDCB.Server` first. Its native HTTP/2 launch endpoint is `http://localhost:5010`; gRPC-Web is for browser clients and is not needed by the CLI.
 
 ## Server Selection
 
@@ -56,16 +56,18 @@ Use `nativedcb <group> <command> --help` for command-specific usage.
 | `database capabilities` | None. |
 | `database head` | `--database NAME` |
 
-### CatalogService (8)
+### CatalogService (10)
 
 | Command | Inputs |
 |---|---|
 | `catalog register-event-schema` | `--database NAME --name SCHEMA`, exactly one schema input, optional `--allow-incompatible` |
 | `catalog register-command-schema` | `--database NAME --name SCHEMA`, exactly one schema input, optional `--allow-incompatible` |
 | `catalog remove-schema` | `--database NAME --name SCHEMA --kind event|command` |
+| `catalog get-schema` | `--database NAME --name SCHEMA --kind event|command` |
+| `catalog list-schemas` | `--database NAME`, optional `--kind event|command` |
 | `catalog register-handler` | `--database NAME --name HANDLER --command-type TYPE`, NDL source and/or plan JSON, optional `--allow-incompatible` |
 | `catalog remove-handler` | `--database NAME --name HANDLER` |
-| `catalog get-handler` | `--database NAME --name HANDLER` |
+| `catalog get-handler` | `--database NAME --name HANDLER`, optional `--include-plan` and `--generate-ndl` |
 | `catalog list-handlers` | `--database NAME` |
 | `catalog validate-ndl` | `--database NAME`, exactly one NDL input, optional repeatable transient schemas |
 

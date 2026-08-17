@@ -67,6 +67,42 @@ public sealed class CatalogGrpcService(DatabaseRegistry registry) : CatalogServi
         }
     }
 
+    public override async Task<GetSchemaResponse> GetSchema(GetSchemaRequest request, ServerCallContext context)
+    {
+        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        ConcurrentDictionary<string, SchemaCatalogEntry> schemas = Schemas(database, request.SchemaKind);
+        if (!schemas.TryGetValue(request.SchemaName, out SchemaCatalogEntry? schema))
+        {
+            throw ProtocolMapper.NotFound($"Schema '{request.SchemaName}' was not found.");
+        }
+
+        return new GetSchemaResponse { Schema = ProtocolMapper.ToSchema(schema, request.SchemaKind) };
+    }
+
+    public override async Task<ListSchemasResponse> ListSchemas(ListSchemasRequest request, ServerCallContext context)
+    {
+        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        IEnumerable<SchemaSummary> schemas = request.SchemaKind switch
+        {
+            SchemaKind.Unspecified => database.Catalog.EventSchemas.Values
+                .Select(value => ProtocolMapper.ToSchemaSummary(value, SchemaKind.Event))
+                .Concat(database.Catalog.CommandSchemas.Values.Select(value =>
+                    ProtocolMapper.ToSchemaSummary(value, SchemaKind.Command))),
+            SchemaKind.Event => database.Catalog.EventSchemas.Values.Select(value =>
+                ProtocolMapper.ToSchemaSummary(value, SchemaKind.Event)),
+            SchemaKind.Command => database.Catalog.CommandSchemas.Values.Select(value =>
+                ProtocolMapper.ToSchemaSummary(value, SchemaKind.Command)),
+            _ => throw ProtocolMapper.InvalidArgument("The schema kind is invalid.")
+        };
+        ListSchemasResponse response = new();
+        response.Schemas.AddRange(schemas
+            .OrderBy(value => value.SchemaKind)
+            .ThenBy(value => value.SchemaName, StringComparer.Ordinal));
+        return response;
+    }
+
     public override async Task<RegisterHandlerResponse> RegisterHandler(
         RegisterHandlerRequest request,
         ServerCallContext context)
@@ -82,7 +118,9 @@ public sealed class CatalogGrpcService(DatabaseRegistry registry) : CatalogServi
         Dictionary<string, RegisteredJsonSchema> eventSchemas = ParseEventSchemas(database);
         HandlerDescription description = new()
         {
-            HandlerName = request.HandlerName, CommandType = request.CommandType, NdlSource = request.NdlSource
+            HandlerName = request.HandlerName,
+            CommandType = request.CommandType,
+            NdlSource = request.NdlSource
         };
         string planJson = string.Empty;
         if (request.PlanJson.Length > 0)
@@ -229,7 +267,31 @@ public sealed class CatalogGrpcService(DatabaseRegistry registry) : CatalogServi
             throw ProtocolMapper.NotFound($"Handler '{request.HandlerName}' was not found.");
         }
 
-        return new GetHandlerResponse { Handler = ProtocolMapper.ToHandler(handler) };
+        HandlerDescription description = ProtocolMapper.ToHandler(handler);
+        if (request.IncludePlanJson)
+        {
+            description.PlanJson = Google.Protobuf.ByteString.CopyFromUtf8(handler.PlanJson);
+        }
+
+        if (request.GenerateNdl)
+        {
+            NdlPlanFormatResult generated = Ndl.Ndl.TryFormat(handler.ParsePlan());
+            if (generated.Success)
+            {
+                description.GeneratedNdl = generated.NdlSource;
+            }
+            else
+            {
+                description.NdlGenerationDiagnostics.AddRange(generated.Diagnostics.Select(value => new Diagnostic
+                {
+                    Code = "NDL3001",
+                    Severity = DiagnosticSeverity.Error,
+                    Message = $"{value.Path}: {value.Message}"
+                }));
+            }
+        }
+
+        return new GetHandlerResponse { Handler = description };
     }
 
     public override async Task<ListHandlersResponse> ListHandlers(ListHandlersRequest request,
@@ -403,6 +465,18 @@ public sealed class CatalogGrpcService(DatabaseRegistry registry) : CatalogServi
             throw ProtocolMapper.Unavailable(
                 $"Database '{database.Name}' does not accept catalog changes while in state '{database.Status}'.");
         }
+    }
+
+    private static ConcurrentDictionary<string, SchemaCatalogEntry> Schemas(
+        DatabaseEntry database,
+        SchemaKind kind)
+    {
+        return kind switch
+        {
+            SchemaKind.Event => database.Catalog.EventSchemas,
+            SchemaKind.Command => database.Catalog.CommandSchemas,
+            _ => throw ProtocolMapper.InvalidArgument("A schema kind is required.")
+        };
     }
 
     private static IReadOnlyList<string> ValidatePlan(

@@ -1,3 +1,5 @@
+using NativeDCB.Model;
+
 namespace NativeDCB.Ndl;
 
 public static class Ndl
@@ -25,5 +27,15 @@ public static class Ndl
     public static string Format(DocumentSyntax document)
     {
         return NdlFormatter.Format(document);
+    }
+
+    public static string Format(DecisionPlan plan)
+    {
+        return NdlPlanFormatter.Format(plan);
+    }
+
+    public static NdlPlanFormatResult TryFormat(DecisionPlan plan)
+    {
+        return NdlPlanFormatter.TryFormat(plan);
     }
 }
