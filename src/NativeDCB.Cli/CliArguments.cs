@@ -205,8 +205,3 @@ internal sealed class CliArguments
         }
     }
 }
-
-internal sealed class CliUsageException(string message) : Exception(message);
-
-internal sealed class CliInputException(string message, Exception? innerException = null) :
-    Exception(message, innerException);

@@ -4,17 +4,6 @@ using NativeDCB.Protocol.V1;
 
 namespace NativeDCB.Web.Services;
 
-public sealed record RpcMethodMetadata(
-    string Name,
-    string FullName,
-    string InputType,
-    string OutputType,
-    bool ClientStreaming,
-    bool ServerStreaming);
-
-public sealed record RpcServiceMetadata(int Ordinal, string Name, string FullName,
-    IReadOnlyList<RpcMethodMetadata> Methods);
-
 public static class RpcCatalog
 {
     public static IReadOnlyList<RpcServiceMetadata> Services { get; } = Build();
