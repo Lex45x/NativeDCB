@@ -54,4 +54,7 @@ app.MapGet("/health/ready", () => registry.List().All(entry => entry.Status is
 app.Run();
 
 // ReSharper disable once ClassNeverInstantiated.Global -- WebApplicationFactory discovers the ASP.NET entry point.
-public partial class Program;
+namespace NativeDCB.Server
+{
+    public partial class Program;
+}

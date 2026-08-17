@@ -1,5 +1,7 @@
 using NativeDCB.Sdk;
 
+namespace CourseSubscriptions;
+
 [EventType("StudentSubscribedToCourse")]
 public sealed record StudentSubscribedToCourse(
     // ReSharper disable once NotAccessedPositionalProperty.Global

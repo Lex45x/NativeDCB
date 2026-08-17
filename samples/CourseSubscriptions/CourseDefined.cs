@@ -1,5 +1,7 @@
 using NativeDCB.Sdk;
 
+namespace CourseSubscriptions;
+
 [EventType("CourseDefined")]
 // ReSharper disable once ClassNeverInstantiated.Global
 public sealed record CourseDefined(

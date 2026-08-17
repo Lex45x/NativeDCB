@@ -1,3 +1,5 @@
+using CourseSubscriptions;
+
 using NativeDCB.Generated;
 using NativeDCB.Protocol.V1;
 using NativeDCB.Sdk;
