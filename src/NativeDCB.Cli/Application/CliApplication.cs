@@ -205,8 +205,7 @@ internal static class CliApplication
                 return await UnaryAsync(catalog.RemoveHandlerAsync(
                     new RemoveHandlerRequest
                     {
-                        Database = arguments.Required("database"),
-                        HandlerName = arguments.Required("name")
+                        Database = arguments.Required("database"), HandlerName = arguments.Required("name")
                     }, cancellationToken: cancellationToken));
             case "catalog get-handler":
                 arguments.EnsureAllowed("database", "name", "include-plan", "generate-ndl");
@@ -260,8 +259,7 @@ internal static class CliApplication
                 return await UnaryAsync(commands.GetEventsByCommandIdAsync(
                     new GetEventsByCommandIdRequest
                     {
-                        Database = arguments.Required("database"),
-                        CommandId = arguments.Required("command-id")
+                        Database = arguments.Required("database"), CommandId = arguments.Required("command-id")
                     }, cancellationToken: cancellationToken));
             case "event read-range":
                 arguments.EnsureAllowed("database", "after", "through", "limit", "mode");
@@ -367,8 +365,7 @@ internal static class CliApplication
                 arguments.EnsureAllowed("database", "event-type", "key");
                 RequestIndexRebuildRequest indexRequest = new()
                 {
-                    Database = arguments.Required("database"),
-                    EventType = arguments.Required("event-type")
+                    Database = arguments.Required("database"), EventType = arguments.Required("event-type")
                 };
                 indexRequest.Keys.AddRange(InputReader.ParseKeys(arguments.Many("key")));
                 return await UnaryAsync(

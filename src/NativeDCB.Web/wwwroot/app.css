@@ -14,9 +14,9 @@
     --acid-dark: #8ba62d;
     --red: #ff655d;
     --amber: #d7a94c;
-    --mono: 'DM Mono',  'Cascadia Mono',  Consolas,  monospace;
-    --sans: Inter,  Arial,  sans-serif;
-    --serif: 'Instrument Serif',  Georgia,  serif;
+    --mono: 'DM Mono',   'Cascadia Mono',   Consolas,   monospace;
+    --sans: Inter,   Arial,   sans-serif;
+    --serif: 'Instrument Serif',   Georgia,   serif;
 }
 
 * { box-sizing: border-box; }
