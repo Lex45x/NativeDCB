@@ -5,15 +5,21 @@ using Google.Protobuf;
 
 using Grpc.Core;
 
-using NativeDCB.Model;
-using NativeDCB.Ndl;
+using NativeDCB.Model.Databases;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Ndl.Compilation;
+using NativeDCB.Ndl.Formatting;
+using NativeDCB.Ndl.Parsing;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Runtime;
-using NativeDCB.Server.Storage;
+using NativeDCB.Server.Catalog;
+using NativeDCB.Server.Catalog.Schemas;
+using NativeDCB.Server.Databases;
+using NativeDCB.Server.Decisions.Execution;
+using NativeDCB.Server.Grpc.Infrastructure;
 
 using DiagnosticSeverity = NativeDCB.Protocol.V1.DiagnosticSeverity;
 
-namespace NativeDCB.Server.Services;
+namespace NativeDCB.Server.Grpc;
 
 public sealed class CatalogGrpcService(DatabaseRegistry registry) : CatalogService.CatalogServiceBase
 {

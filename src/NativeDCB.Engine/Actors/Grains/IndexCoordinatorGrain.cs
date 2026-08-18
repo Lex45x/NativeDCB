@@ -1,9 +1,13 @@
 using System.Text.Json;
 
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Actors.Messages;
+using NativeDCB.Engine.Storage.Indexes;
+
 // Orleans discovers grain implementations at runtime.
 // ReSharper disable UnusedType.Global
 
-namespace NativeDCB.Engine.Actors;
+namespace NativeDCB.Engine.Actors.Grains;
 
 public sealed class IndexCoordinatorGrain(IDatabaseStoreProvider stores, IGrainFactory grains)
     : Grain, IIndexCoordinatorGrain

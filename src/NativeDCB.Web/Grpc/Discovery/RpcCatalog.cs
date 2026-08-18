@@ -4,7 +4,7 @@ using NativeDCB.Protocol.V1;
 
 using ServiceDescriptor = Google.Protobuf.Reflection.ServiceDescriptor;
 
-namespace NativeDCB.Web.Services;
+namespace NativeDCB.Web.Grpc.Discovery;
 
 public static class RpcCatalog
 {

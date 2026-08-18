@@ -9,8 +9,9 @@ using Grpc.Net.Client;
 
 using NativeDCB.Protocol.V1;
 using NativeDCB.Sdk;
+using NativeDCB.Sdk.Client;
 
-namespace NativeDCB.EndToEndTests;
+namespace NativeDCB.EndToEndTests.Processes;
 
 public sealed class CourseSubscriptionsProcessTests
 {

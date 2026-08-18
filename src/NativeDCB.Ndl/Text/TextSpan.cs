@@ -1,4 +1,4 @@
-namespace NativeDCB.Ndl;
+namespace NativeDCB.Ndl.Text;
 
 public readonly record struct TextSpan(int Start, int Length)
 {

@@ -1,4 +1,4 @@
-namespace NativeDCB.Cli;
+namespace NativeDCB.Cli.Presentation;
 
 internal static class HelpText
 {

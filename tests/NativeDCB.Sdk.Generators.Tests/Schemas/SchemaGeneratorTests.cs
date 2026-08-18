@@ -1,7 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
-namespace NativeDCB.Sdk.Generators.Tests;
+namespace NativeDCB.Sdk.Generators.Tests.Schemas;
 
 public sealed class SchemaGeneratorTests
 {

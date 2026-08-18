@@ -1,4 +1,8 @@
-namespace NativeDCB.Ndl.Tests;
+using NativeDCB.Ndl.Diagnostics;
+using NativeDCB.Ndl.Lexing;
+using NativeDCB.Ndl.Text;
+
+namespace NativeDCB.Ndl.Tests.Lexing;
 
 public class LexerTests
 {

@@ -1,6 +1,6 @@
 using System.Linq.Expressions;
 
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Decisions.Authoring;
 
 // ReSharper disable once UnusedTypeParameter
 public sealed class EvaluatedDecision<TCommand, TModel, TEvaluation>

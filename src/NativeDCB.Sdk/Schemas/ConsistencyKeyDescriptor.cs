@@ -1,6 +1,6 @@
 using System.Reflection;
 
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Schemas;
 
 public sealed record ConsistencyKeyDescriptor(string Name, PropertyInfo Property)
 {

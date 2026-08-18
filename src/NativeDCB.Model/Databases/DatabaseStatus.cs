@@ -1,4 +1,4 @@
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Databases;
 
 public enum DatabaseStatus
 {

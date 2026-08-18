@@ -1,4 +1,4 @@
-namespace NativeDCB.Ndl;
+namespace NativeDCB.Ndl.Formatting;
 
 public sealed record NdlPlanFormatResult(string? NdlSource, IReadOnlyList<NdlPlanFormatDiagnostic> Diagnostics)
 {

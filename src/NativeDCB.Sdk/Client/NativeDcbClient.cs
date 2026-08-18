@@ -6,17 +6,20 @@ using Google.Protobuf;
 using Grpc.Core;
 using Grpc.Net.Client;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Model.Events;
 using NativeDCB.Protocol.V1;
+using NativeDCB.Sdk.Decisions.Authoring;
+using NativeDCB.Sdk.Schemas;
 
-using ModelQuery = NativeDCB.Model.EventQuery;
+using ModelQuery = NativeDCB.Model.Queries.EventQuery;
 using ProtocolQuery = NativeDCB.Protocol.V1.Query;
-using QueryItem = NativeDCB.Model.QueryItem;
+using QueryItem = NativeDCB.Model.Queries.QueryItem;
 
 // Public client operations and request builders are consumed by applications outside this solution.
 // ReSharper disable UnusedMember.Global
 // ReSharper disable MemberCanBePrivate.Global
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Client;
 
 public sealed class NativeDcbClient : IDisposable
 {

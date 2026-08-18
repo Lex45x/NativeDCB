@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Events;
 
-namespace NativeDCB.Server.Storage;
+namespace NativeDCB.Server.Catalog.Schemas;
 
 internal sealed class RegisteredJsonSchema
 {

@@ -1,4 +1,8 @@
-namespace NativeDCB.Engine.Actors;
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Storage.EventLog;
+using NativeDCB.Engine.Storage.State;
+
+namespace NativeDCB.Engine.Actors.Grains;
 
 // ReSharper disable once UnusedType.Global -- Orleans activates grains by interface at runtime.
 public sealed class StateBuilderGrain(IDatabaseStoreProvider stores) : Grain, IStateBuilderGrain

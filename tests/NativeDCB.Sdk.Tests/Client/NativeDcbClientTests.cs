@@ -3,12 +3,14 @@ using System.Text.Json;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Queries;
 using NativeDCB.Protocol.V1;
+using NativeDCB.Sdk.Client;
 
-using QueryItem = NativeDCB.Model.QueryItem;
+using QueryItem = NativeDCB.Model.Queries.QueryItem;
 
-namespace NativeDCB.Sdk.Tests;
+namespace NativeDCB.Sdk.Tests.Client;
 
 public sealed class NativeDcbClientTests
 {

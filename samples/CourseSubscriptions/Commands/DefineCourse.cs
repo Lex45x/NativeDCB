@@ -1,6 +1,7 @@
 using NativeDCB.Sdk;
+using NativeDCB.Sdk.Schemas;
 
-namespace CourseSubscriptions;
+namespace CourseSubscriptions.Commands;
 
 [CommandType("DefineCourse")]
 public sealed record DefineCourse(

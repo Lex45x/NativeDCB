@@ -1,4 +1,6 @@
-namespace NativeDCB.Model;
+using NativeDCB.Model.Events;
+
+namespace NativeDCB.Model.Queries;
 
 public sealed record QueryItem(
     IReadOnlyList<string> EventTypes,

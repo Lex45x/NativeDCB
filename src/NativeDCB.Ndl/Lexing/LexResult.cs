@@ -1,4 +1,7 @@
-namespace NativeDCB.Ndl;
+using NativeDCB.Ndl.Diagnostics;
+using NativeDCB.Ndl.Text;
+
+namespace NativeDCB.Ndl.Lexing;
 
 public sealed class LexResult(
     SourceText source,

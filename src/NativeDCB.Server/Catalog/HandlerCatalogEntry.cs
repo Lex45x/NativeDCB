@@ -1,8 +1,9 @@
 using System.Text.Json;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Server.Databases;
 
-namespace NativeDCB.Server.Storage;
+namespace NativeDCB.Server.Catalog;
 
 public sealed record HandlerCatalogEntry(
     string Name,

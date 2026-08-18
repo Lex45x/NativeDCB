@@ -1,4 +1,4 @@
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Decisions.Authoring;
 
 public static class Decision
 {

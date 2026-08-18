@@ -1,4 +1,8 @@
-namespace NativeDCB.Ndl;
+using NativeDCB.Ndl.Diagnostics;
+using NativeDCB.Ndl.Syntax;
+using NativeDCB.Ndl.Text;
+
+namespace NativeDCB.Ndl.Parsing;
 
 public sealed class ParseResult(
     SourceText source,

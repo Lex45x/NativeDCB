@@ -1,6 +1,8 @@
 using System.Text.Json;
 
-namespace NativeDCB.Engine;
+using NativeDCB.Engine.Storage.EventLog;
+
+namespace NativeDCB.Engine.Storage.State;
 
 public static class StateFileInspector
 {

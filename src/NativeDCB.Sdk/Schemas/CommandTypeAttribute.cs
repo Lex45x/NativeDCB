@@ -1,4 +1,4 @@
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Schemas;
 
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = false)]
 public sealed class CommandTypeAttribute(string name) : Attribute

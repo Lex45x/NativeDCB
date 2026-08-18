@@ -1,4 +1,6 @@
-namespace NativeDCB.Ndl;
+using NativeDCB.Ndl.Text;
+
+namespace NativeDCB.Ndl.Syntax;
 
 public sealed record DecisionSyntax(
     string Name,

@@ -1,4 +1,4 @@
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Decisions.Diagnostics;
 
 public enum SdkDiagnosticSeverity
 {

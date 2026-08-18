@@ -1,9 +1,9 @@
 using Grpc.Core;
 using Grpc.Core.Interceptors;
 
-using NativeDCB.Engine;
+using NativeDCB.Engine.Storage.EventLog;
 
-namespace NativeDCB.Server.Services;
+namespace NativeDCB.Server.Grpc.Infrastructure;
 
 public sealed class GrpcExceptionInterceptor(ILogger<GrpcExceptionInterceptor> logger) : Interceptor
 {

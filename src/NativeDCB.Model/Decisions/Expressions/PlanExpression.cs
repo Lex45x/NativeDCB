@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Decisions.Expressions;
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$expression")]
 [JsonDerivedType(typeof(PlanLiteralExpression), "literal")]

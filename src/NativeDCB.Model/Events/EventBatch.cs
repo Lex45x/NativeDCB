@@ -1,4 +1,4 @@
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Events;
 
 public sealed record EventBatch(
     Guid CommandId,

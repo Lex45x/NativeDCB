@@ -1,4 +1,4 @@
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Schemas;
 
 public enum SchemaType
 {

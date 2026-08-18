@@ -1,8 +1,12 @@
 using System.Text.Json;
 
+using NativeDCB.Engine.Actors.Messages;
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Events.Appending;
+using NativeDCB.Model.Queries;
 
-namespace NativeDCB.Engine.Actors;
+namespace NativeDCB.Engine.Actors.Mapping;
 
 public static class ActorMessageMapper
 {

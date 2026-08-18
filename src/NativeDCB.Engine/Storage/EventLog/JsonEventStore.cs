@@ -1,9 +1,13 @@
 using System.Text.Json;
 using System.Threading.Channels;
 
+using NativeDCB.Engine.Storage.State;
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Events.Appending;
+using NativeDCB.Model.Queries;
 
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.EventLog;
 
 public sealed class JsonEventStore : IAsyncDisposable
 {

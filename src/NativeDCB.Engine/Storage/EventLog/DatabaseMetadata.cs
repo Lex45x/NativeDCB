@@ -1,4 +1,4 @@
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.EventLog;
 
 internal sealed record DatabaseMetadata(
     int FormatVersion,

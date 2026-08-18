@@ -1,7 +1,7 @@
 // Orleans serialization contracts are consumed across process boundaries.
 // ReSharper disable NotAccessedPositionalProperty.Global
 
-namespace NativeDCB.Engine.Actors;
+namespace NativeDCB.Engine.Actors.Messages;
 
 [GenerateSerializer]
 [Immutable]

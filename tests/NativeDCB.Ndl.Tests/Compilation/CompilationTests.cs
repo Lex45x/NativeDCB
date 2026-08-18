@@ -1,6 +1,11 @@
 using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Model.Decisions.Expressions;
+using NativeDCB.Ndl.Compilation;
+using NativeDCB.Ndl.Formatting;
+using NativeDCB.Ndl.Tests.Support;
 
-namespace NativeDCB.Ndl.Tests;
+namespace NativeDCB.Ndl.Tests.Compilation;
 
 public sealed class CompilationTests
 {

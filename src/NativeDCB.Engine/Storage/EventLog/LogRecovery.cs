@@ -1,8 +1,9 @@
 using System.Text.Json;
 
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
 
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.EventLog;
 
 internal static class LogRecovery
 {

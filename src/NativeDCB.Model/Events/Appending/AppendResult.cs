@@ -1,4 +1,4 @@
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Events.Appending;
 
 public sealed record AppendResult(
     AppendOutcome Outcome,

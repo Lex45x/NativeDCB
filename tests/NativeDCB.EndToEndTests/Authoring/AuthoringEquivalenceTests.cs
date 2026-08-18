@@ -1,7 +1,10 @@
 using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
 using NativeDCB.Sdk;
+using NativeDCB.Sdk.Decisions.Authoring;
+using NativeDCB.Sdk.Schemas;
 
-namespace NativeDCB.EndToEndTests;
+namespace NativeDCB.EndToEndTests.Authoring;
 
 public sealed class AuthoringEquivalenceTests
 {

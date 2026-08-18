@@ -1,4 +1,10 @@
-namespace NativeDCB.Ndl.Tests;
+using NativeDCB.Ndl.Diagnostics;
+using NativeDCB.Ndl.Parsing;
+using NativeDCB.Ndl.Syntax;
+using NativeDCB.Ndl.Syntax.Statements;
+using NativeDCB.Ndl.Tests.Support;
+
+namespace NativeDCB.Ndl.Tests.Diagnostics;
 
 public class DiagnosticTests
 {

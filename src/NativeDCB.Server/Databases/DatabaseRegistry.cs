@@ -4,10 +4,11 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Options;
 
-using NativeDCB.Engine;
-using NativeDCB.Engine.Actors;
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Storage.EventLog;
+using NativeDCB.Server.Catalog;
 
-namespace NativeDCB.Server.Storage;
+namespace NativeDCB.Server.Databases;
 
 public sealed class DatabaseRegistry : IAsyncDisposable, IDatabaseStoreProvider
 {

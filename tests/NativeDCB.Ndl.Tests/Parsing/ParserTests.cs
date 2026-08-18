@@ -1,4 +1,11 @@
-namespace NativeDCB.Ndl.Tests;
+using NativeDCB.Ndl.Lexing;
+using NativeDCB.Ndl.Parsing;
+using NativeDCB.Ndl.Syntax;
+using NativeDCB.Ndl.Syntax.Expressions;
+using NativeDCB.Ndl.Syntax.Statements;
+using NativeDCB.Ndl.Tests.Support;
+
+namespace NativeDCB.Ndl.Tests.Parsing;
 
 public class ParserTests
 {

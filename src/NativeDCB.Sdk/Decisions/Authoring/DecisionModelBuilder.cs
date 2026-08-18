@@ -1,6 +1,6 @@
 using System.Linq.Expressions;
 
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Decisions.Authoring;
 
 public sealed class DecisionModelBuilder<TCommand, TModel>
     where TCommand : notnull

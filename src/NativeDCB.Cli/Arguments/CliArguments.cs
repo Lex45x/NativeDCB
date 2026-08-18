@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace NativeDCB.Cli;
+namespace NativeDCB.Cli.Arguments;
 
 internal sealed class CliArguments
 {

@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 
 using NativeDCB.Web.Components;
-using NativeDCB.Web.Services;
+using NativeDCB.Web.Grpc;
 
 WebAssemblyHostBuilder builder = WebAssemblyHostBuilder.CreateDefault(args);
 

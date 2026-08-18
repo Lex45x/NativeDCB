@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 
+using NativeDCB.Engine.Storage.EventLog;
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
 
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.State;
 
 public sealed class StateBuilder
 {

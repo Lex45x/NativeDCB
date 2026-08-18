@@ -1,8 +1,13 @@
 using System.Linq.Expressions;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Model.Decisions.Evaluation;
+using NativeDCB.Model.Decisions.Expressions;
+using NativeDCB.Sdk.Decisions.Authoring;
+using NativeDCB.Sdk.Decisions.Diagnostics;
+using NativeDCB.Sdk.Schemas;
 
-namespace NativeDCB.Sdk.Tests;
+namespace NativeDCB.Sdk.Tests.Decisions;
 
 public sealed class DecisionDefinitionTests
 {

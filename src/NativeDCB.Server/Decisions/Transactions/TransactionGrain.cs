@@ -1,10 +1,13 @@
 using System.Text.Json;
 
-using NativeDCB.Engine.Actors;
-using NativeDCB.Server.Runtime;
-using NativeDCB.Server.Storage;
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Actors.Mapping;
+using NativeDCB.Engine.Actors.Messages;
+using NativeDCB.Server.Catalog;
+using NativeDCB.Server.Catalog.Schemas;
+using NativeDCB.Server.Decisions.Execution;
 
-namespace NativeDCB.Server.Actors;
+namespace NativeDCB.Server.Decisions.Transactions;
 
 // ReSharper disable once UnusedType.Global -- Orleans activates grains by interface at runtime.
 public sealed class TransactionGrain(IGrainFactory grains) : Grain, ITransactionGrain

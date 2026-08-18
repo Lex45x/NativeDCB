@@ -1,4 +1,4 @@
-namespace NativeDCB.Server.Actors;
+namespace NativeDCB.Server.Decisions.Transactions;
 
 internal static class GrainCall
 {

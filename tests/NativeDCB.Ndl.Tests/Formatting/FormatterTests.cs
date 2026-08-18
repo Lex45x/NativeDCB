@@ -1,4 +1,8 @@
-namespace NativeDCB.Ndl.Tests;
+using NativeDCB.Ndl.Formatting;
+using NativeDCB.Ndl.Parsing;
+using NativeDCB.Ndl.Tests.Support;
+
+namespace NativeDCB.Ndl.Tests.Formatting;
 
 public class FormatterTests
 {

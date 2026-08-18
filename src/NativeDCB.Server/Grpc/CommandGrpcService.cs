@@ -4,14 +4,18 @@ using Google.Protobuf;
 
 using Grpc.Core;
 
-using NativeDCB.Engine;
-using NativeDCB.Engine.Actors;
-using NativeDCB.Model;
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Actors.Mapping;
+using NativeDCB.Engine.Actors.Messages;
+using NativeDCB.Engine.Storage.EventLog;
+using NativeDCB.Model.Events;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Actors;
-using NativeDCB.Server.Storage;
+using NativeDCB.Server.Catalog;
+using NativeDCB.Server.Databases;
+using NativeDCB.Server.Decisions.Transactions;
+using NativeDCB.Server.Grpc.Infrastructure;
 
-namespace NativeDCB.Server.Services;
+namespace NativeDCB.Server.Grpc;
 
 public sealed class CommandGrpcService(DatabaseRegistry registry, IGrainFactory grains)
     : CommandService.CommandServiceBase

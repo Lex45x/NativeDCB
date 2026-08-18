@@ -3,8 +3,17 @@ using System.Security.Cryptography;
 using System.Text;
 
 using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Model.Decisions.Evaluation;
+using NativeDCB.Model.Decisions.Expressions;
+using NativeDCB.Ndl.Formatting;
+using NativeDCB.Ndl.Lexing;
+using NativeDCB.Ndl.Parsing;
+using NativeDCB.Ndl.Syntax;
+using NativeDCB.Ndl.Syntax.Expressions;
+using NativeDCB.Ndl.Syntax.Statements;
 
-namespace NativeDCB.Ndl;
+namespace NativeDCB.Ndl.Compilation;
 
 internal static class NdlCompiler
 {

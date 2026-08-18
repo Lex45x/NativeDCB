@@ -1,8 +1,11 @@
 using System.Linq.Expressions;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Model.Queries;
+using NativeDCB.Sdk.Decisions.Compilation;
+using NativeDCB.Sdk.Decisions.Diagnostics;
 
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Decisions.Authoring;
 
 public sealed class DecisionDefinition<TCommand>
     where TCommand : notnull

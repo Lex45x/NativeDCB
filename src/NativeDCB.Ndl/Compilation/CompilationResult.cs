@@ -1,6 +1,9 @@
 using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Ndl.Diagnostics;
+using NativeDCB.Ndl.Text;
 
-namespace NativeDCB.Ndl;
+namespace NativeDCB.Ndl.Compilation;
 
 public sealed record CompilationResult(
     // ReSharper disable once NotAccessedPositionalProperty.Global

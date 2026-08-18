@@ -1,6 +1,6 @@
-using NativeDCB.Web.Services;
+using NativeDCB.Web.Grpc.Discovery;
 
-namespace NativeDCB.EndToEndTests;
+namespace NativeDCB.EndToEndTests.Web;
 
 public sealed class WebRpcCatalogTests
 {

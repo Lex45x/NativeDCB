@@ -1,4 +1,4 @@
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Schemas;
 
 [AttributeUsage(AttributeTargets.Property)]
 public sealed class ConsistencyKeyAttribute(string name) : Attribute

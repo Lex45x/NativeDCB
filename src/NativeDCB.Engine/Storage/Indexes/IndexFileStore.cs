@@ -2,9 +2,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
+using NativeDCB.Engine.Storage.EventLog;
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
 
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.Indexes;
 
 internal static class IndexFileStore
 {

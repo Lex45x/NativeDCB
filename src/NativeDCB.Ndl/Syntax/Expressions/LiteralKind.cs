@@ -1,4 +1,4 @@
-namespace NativeDCB.Ndl;
+namespace NativeDCB.Ndl.Syntax.Expressions;
 
 public enum LiteralKind
 {

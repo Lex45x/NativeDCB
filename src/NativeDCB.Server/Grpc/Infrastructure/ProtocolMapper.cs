@@ -5,20 +5,25 @@ using Google.Protobuf.WellKnownTypes;
 
 using Grpc.Core;
 
-using NativeDCB.Engine;
-using NativeDCB.Engine.Actors;
-using NativeDCB.Model;
-using NativeDCB.Ndl;
+using NativeDCB.Engine.Actors.Messages;
+using NativeDCB.Engine.Storage.State;
+using NativeDCB.Model.Databases;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Queries;
+using NativeDCB.Ndl.Diagnostics;
+using NativeDCB.Ndl.Parsing;
+using NativeDCB.Ndl.Text;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Storage;
+using NativeDCB.Server.Catalog;
+using NativeDCB.Server.Databases;
 
-using DiagnosticSeverity = NativeDCB.Ndl.DiagnosticSeverity;
+using DiagnosticSeverity = NativeDCB.Ndl.Diagnostics.DiagnosticSeverity;
 using ProtocolDatabaseInfo = NativeDCB.Protocol.V1.DatabaseInfo;
 using ProtocolDiagnostic = NativeDCB.Protocol.V1.Diagnostic;
 using ProtocolPartitionStatus = NativeDCB.Protocol.V1.PartitionStatus;
-using QueryItem = NativeDCB.Model.QueryItem;
+using QueryItem = NativeDCB.Model.Queries.QueryItem;
 
-namespace NativeDCB.Server.Services;
+namespace NativeDCB.Server.Grpc.Infrastructure;
 
 internal static class ProtocolMapper
 {

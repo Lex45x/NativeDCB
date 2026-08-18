@@ -1,4 +1,4 @@
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Decisions.Expressions;
 
 public enum PlanUnaryOperator
 {

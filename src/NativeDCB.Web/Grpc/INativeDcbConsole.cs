@@ -1,4 +1,4 @@
-namespace NativeDCB.Web.Services;
+namespace NativeDCB.Web.Grpc;
 
 public interface INativeDcbConsole
 {

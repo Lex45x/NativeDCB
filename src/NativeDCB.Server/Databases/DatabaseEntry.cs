@@ -1,9 +1,10 @@
 using System.Text.Json;
 
-using NativeDCB.Engine;
-using NativeDCB.Model;
+using NativeDCB.Engine.Storage.EventLog;
+using NativeDCB.Model.Databases;
+using NativeDCB.Server.Catalog;
 
-namespace NativeDCB.Server.Storage;
+namespace NativeDCB.Server.Databases;
 
 public sealed class DatabaseEntry : IAsyncDisposable
 {

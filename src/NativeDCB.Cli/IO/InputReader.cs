@@ -2,9 +2,10 @@ using System.Text.Json;
 
 using Google.Protobuf;
 
+using NativeDCB.Cli.Arguments;
 using NativeDCB.Protocol.V1;
 
-namespace NativeDCB.Cli;
+namespace NativeDCB.Cli.IO;
 
 internal sealed class InputReader(CancellationToken cancellationToken)
 {

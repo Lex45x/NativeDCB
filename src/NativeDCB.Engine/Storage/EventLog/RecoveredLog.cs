@@ -1,6 +1,7 @@
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
 
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.EventLog;
 
 internal sealed class RecoveredLog
 {

@@ -1,6 +1,6 @@
-using NativeDCB.Model;
+using NativeDCB.Model.Events;
 
-namespace NativeDCB.Server.Runtime;
+namespace NativeDCB.Server.Decisions.Execution;
 
 internal sealed record DecisionExecution(
     DecisionOutcome Outcome,

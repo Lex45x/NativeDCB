@@ -1,4 +1,6 @@
-namespace NativeDCB.Engine.Actors;
+using NativeDCB.Engine.Actors.Messages;
+
+namespace NativeDCB.Engine.Actors.Contracts;
 
 public interface IMainWriterGrain : IGrainWithStringKey
 {

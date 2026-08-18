@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Events;
 
 public sealed record CandidateEvent(
     string Type,

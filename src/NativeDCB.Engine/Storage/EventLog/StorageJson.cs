@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.EventLog;
 
 internal static class StorageJson
 {

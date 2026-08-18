@@ -1,4 +1,6 @@
-namespace NativeDCB.Engine.Actors;
+using NativeDCB.Engine.Storage.EventLog;
+
+namespace NativeDCB.Engine.Actors.Contracts;
 
 public interface IDatabaseStoreProvider
 {

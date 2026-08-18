@@ -1,8 +1,10 @@
 using System.Text.Json;
 
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Queries;
 
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.EventLog;
 
 public static class PartitionEventReader
 {

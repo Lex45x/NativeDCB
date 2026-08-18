@@ -1,6 +1,8 @@
+using NativeDCB.Engine.Actors.Messages;
+
 using Orleans.Concurrency;
 
-namespace NativeDCB.Engine.Actors;
+namespace NativeDCB.Engine.Actors.Contracts;
 
 public interface IIndexCoordinatorGrain : IGrainWithStringKey
 {

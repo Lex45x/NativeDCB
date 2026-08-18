@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
 
-namespace NativeDCB.Sdk.Analyzers.Tests;
+namespace NativeDCB.Sdk.Analyzers.Tests.Schemas;
 
 public sealed class SchemaAnalyzerTests
 {

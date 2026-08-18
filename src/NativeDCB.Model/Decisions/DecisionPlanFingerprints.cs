@@ -1,4 +1,4 @@
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Decisions;
 
 public sealed record DecisionPlanFingerprints(
     string LanguageVersion,

@@ -1,8 +1,8 @@
 using System.Linq.Expressions;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Queries;
 
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Decisions.Authoring;
 
 public sealed record IncludedEventDefinition(
     Type EventType,

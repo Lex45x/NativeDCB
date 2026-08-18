@@ -1,4 +1,10 @@
 using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Ndl.Compilation;
+using NativeDCB.Ndl.Formatting;
+using NativeDCB.Ndl.Lexing;
+using NativeDCB.Ndl.Parsing;
+using NativeDCB.Ndl.Syntax;
 
 namespace NativeDCB.Ndl;
 

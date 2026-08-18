@@ -1,8 +1,17 @@
 using System.Globalization;
 
 using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
+using NativeDCB.Model.Decisions.Evaluation;
+using NativeDCB.Model.Decisions.Expressions;
+using NativeDCB.Ndl.Compilation;
+using NativeDCB.Ndl.Lexing;
+using NativeDCB.Ndl.Syntax;
+using NativeDCB.Ndl.Syntax.Expressions;
+using NativeDCB.Ndl.Syntax.Statements;
+using NativeDCB.Ndl.Text;
 
-namespace NativeDCB.Ndl;
+namespace NativeDCB.Ndl.Formatting;
 
 public static class NdlPlanFormatter
 {

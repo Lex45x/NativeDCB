@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace NativeDCB.Server.Storage;
+namespace NativeDCB.Server.Catalog;
 
 public sealed class CatalogDocument
 {

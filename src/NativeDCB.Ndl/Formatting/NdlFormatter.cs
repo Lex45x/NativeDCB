@@ -1,7 +1,13 @@
 using System.Globalization;
 using System.Text;
 
-namespace NativeDCB.Ndl;
+using NativeDCB.Ndl.Lexing;
+using NativeDCB.Ndl.Parsing;
+using NativeDCB.Ndl.Syntax;
+using NativeDCB.Ndl.Syntax.Expressions;
+using NativeDCB.Ndl.Syntax.Statements;
+
+namespace NativeDCB.Ndl.Formatting;
 
 public static class NdlFormatter
 {

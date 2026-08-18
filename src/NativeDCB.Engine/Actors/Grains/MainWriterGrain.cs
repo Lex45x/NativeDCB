@@ -1,9 +1,15 @@
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Actors.Mapping;
+using NativeDCB.Engine.Actors.Messages;
+using NativeDCB.Engine.Storage.EventLog;
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Events.Appending;
 
 // Orleans discovers grain implementations at runtime.
 // ReSharper disable UnusedType.Global
 
-namespace NativeDCB.Engine.Actors;
+namespace NativeDCB.Engine.Actors.Grains;
 
 public sealed class MainWriterGrain(
     IDatabaseStoreProvider stores,

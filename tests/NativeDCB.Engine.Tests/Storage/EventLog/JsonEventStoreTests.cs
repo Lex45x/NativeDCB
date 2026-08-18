@@ -1,8 +1,11 @@
 using System.Text.Json;
 
-using NativeDCB.Model;
+using NativeDCB.Engine.Storage.EventLog;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Events.Appending;
+using NativeDCB.Model.Queries;
 
-namespace NativeDCB.Engine.Tests;
+namespace NativeDCB.Engine.Tests.Storage.EventLog;
 
 public sealed class JsonEventStoreTests
 {

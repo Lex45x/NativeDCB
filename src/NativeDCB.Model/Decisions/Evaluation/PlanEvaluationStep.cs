@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Decisions.Evaluation;
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$step")]
 [JsonDerivedType(typeof(PlanRequirement), "require")]

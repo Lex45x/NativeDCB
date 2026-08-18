@@ -1,4 +1,4 @@
-namespace NativeDCB.Server.Storage;
+namespace NativeDCB.Server.Databases;
 
 public sealed class ServerOptions
 {

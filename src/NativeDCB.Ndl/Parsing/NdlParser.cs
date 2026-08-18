@@ -1,4 +1,11 @@
-namespace NativeDCB.Ndl;
+using NativeDCB.Ndl.Diagnostics;
+using NativeDCB.Ndl.Lexing;
+using NativeDCB.Ndl.Syntax;
+using NativeDCB.Ndl.Syntax.Expressions;
+using NativeDCB.Ndl.Syntax.Statements;
+using NativeDCB.Ndl.Text;
+
+namespace NativeDCB.Ndl.Parsing;
 
 public static class NdlParser
 {

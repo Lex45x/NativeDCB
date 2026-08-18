@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace NativeDCB.Server.Storage;
+namespace NativeDCB.Server.Catalog.Schemas;
 
 internal sealed record JsonPropertySchema(
     string Name,

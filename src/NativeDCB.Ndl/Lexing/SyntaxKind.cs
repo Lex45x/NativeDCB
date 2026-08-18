@@ -1,4 +1,4 @@
-namespace NativeDCB.Ndl;
+namespace NativeDCB.Ndl.Lexing;
 
 public enum SyntaxKind
 {

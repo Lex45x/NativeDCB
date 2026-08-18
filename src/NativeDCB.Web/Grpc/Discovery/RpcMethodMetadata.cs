@@ -1,4 +1,4 @@
-namespace NativeDCB.Web.Services;
+namespace NativeDCB.Web.Grpc.Discovery;
 
 public sealed record RpcMethodMetadata(
     string Name,

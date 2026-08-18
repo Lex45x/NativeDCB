@@ -1,4 +1,4 @@
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Decisions.Expressions;
 
 public sealed record PlanBinaryExpression(
     PlanExpression Left,

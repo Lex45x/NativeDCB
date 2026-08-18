@@ -1,6 +1,6 @@
-using NativeDCB.Sdk;
+using NativeDCB.Sdk.Schemas;
 
-namespace CourseSubscriptions;
+namespace CourseSubscriptions.Events;
 
 [EventType("StudentSubscribedToCourse")]
 public sealed record StudentSubscribedToCourse(

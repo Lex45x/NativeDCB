@@ -1,11 +1,13 @@
 using Grpc.Core;
 
-using NativeDCB.Engine.Actors;
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Actors.Messages;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Actors;
-using NativeDCB.Server.Storage;
+using NativeDCB.Server.Databases;
+using NativeDCB.Server.Decisions.Transactions;
+using NativeDCB.Server.Grpc.Infrastructure;
 
-namespace NativeDCB.Server.Services;
+namespace NativeDCB.Server.Grpc;
 
 public sealed class DatabaseGrpcService(DatabaseRegistry registry, IGrainFactory grains)
     : DatabaseService.DatabaseServiceBase

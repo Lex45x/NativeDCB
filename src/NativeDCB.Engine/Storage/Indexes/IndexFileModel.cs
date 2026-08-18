@@ -1,6 +1,7 @@
 using NativeDCB.Model;
+using NativeDCB.Model.Events;
 
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.Indexes;
 
 internal sealed record IndexFileModel(
     int FormatVersion,

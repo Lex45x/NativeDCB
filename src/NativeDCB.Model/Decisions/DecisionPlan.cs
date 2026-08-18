@@ -1,4 +1,6 @@
-namespace NativeDCB.Model;
+using NativeDCB.Model.Decisions.Evaluation;
+
+namespace NativeDCB.Model.Decisions;
 
 public sealed record DecisionPlan(
     string Name,

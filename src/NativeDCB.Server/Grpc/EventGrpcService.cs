@@ -2,16 +2,20 @@ using System.Threading.Channels;
 
 using Grpc.Core;
 
-using NativeDCB.Engine;
-using NativeDCB.Engine.Actors;
-using NativeDCB.Model;
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Actors.Mapping;
+using NativeDCB.Engine.Actors.Messages;
+using NativeDCB.Engine.Storage.EventLog;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Queries;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Actors;
-using NativeDCB.Server.Storage;
+using NativeDCB.Server.Databases;
+using NativeDCB.Server.Decisions.Transactions;
+using NativeDCB.Server.Grpc.Infrastructure;
 
-using QueryItem = NativeDCB.Model.QueryItem;
+using QueryItem = NativeDCB.Model.Queries.QueryItem;
 
-namespace NativeDCB.Server.Services;
+namespace NativeDCB.Server.Grpc;
 
 public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory grains) : EventService.EventServiceBase
 {

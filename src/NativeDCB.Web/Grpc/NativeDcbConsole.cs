@@ -8,7 +8,7 @@ using Grpc.Net.Client;
 
 using NativeDCB.Protocol.V1;
 
-namespace NativeDCB.Web.Services;
+namespace NativeDCB.Web.Grpc;
 
 public sealed class NativeDcbConsole : INativeDcbConsole
 {

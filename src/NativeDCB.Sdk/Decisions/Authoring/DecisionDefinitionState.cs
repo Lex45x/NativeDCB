@@ -1,6 +1,8 @@
 using System.Linq.Expressions;
 
-namespace NativeDCB.Sdk;
+using NativeDCB.Sdk.Decisions.Diagnostics;
+
+namespace NativeDCB.Sdk.Decisions.Authoring;
 
 internal sealed class DecisionDefinitionState(object command)
 {

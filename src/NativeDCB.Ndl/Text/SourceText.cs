@@ -1,4 +1,4 @@
-namespace NativeDCB.Ndl;
+namespace NativeDCB.Ndl.Text;
 
 public sealed class SourceText
 {

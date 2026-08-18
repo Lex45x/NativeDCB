@@ -1,4 +1,4 @@
-namespace NativeDCB.Engine.Actors;
+namespace NativeDCB.Engine.Actors.Messages;
 
 public enum DecisionResultOutcome
 {

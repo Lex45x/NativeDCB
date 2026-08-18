@@ -1,6 +1,8 @@
 using System.Linq.Expressions;
 
-namespace NativeDCB.Sdk;
+using NativeDCB.Sdk.Decisions.Compilation;
+
+namespace NativeDCB.Sdk.Decisions.Authoring;
 
 public sealed class DecisionModelEventSpec<TCommand, TPrevious, TEvent, TNext>
     where TCommand : notnull

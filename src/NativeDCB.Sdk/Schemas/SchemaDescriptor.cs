@@ -4,9 +4,9 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Events;
 
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Schemas;
 
 public sealed record SchemaDescriptor(
     Type ClrType,

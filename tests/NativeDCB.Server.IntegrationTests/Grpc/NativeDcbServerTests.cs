@@ -10,13 +10,15 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Decisions;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Sdk;
+using NativeDCB.Sdk.Client;
+using NativeDCB.Sdk.Decisions.Authoring;
+using NativeDCB.Sdk.Schemas;
 
 using QueryItem = NativeDCB.Protocol.V1.QueryItem;
 
-namespace NativeDCB.Server.IntegrationTests;
+namespace NativeDCB.Server.IntegrationTests.Grpc;
 
 public sealed class NativeDcbServerTests : IAsyncLifetime
 {

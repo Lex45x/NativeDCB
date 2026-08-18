@@ -1,6 +1,7 @@
-using NativeDCB.Model;
+using NativeDCB.Model.Events;
+using NativeDCB.Sdk.Schemas;
 
-namespace NativeDCB.Sdk.Tests;
+namespace NativeDCB.Sdk.Tests.Schemas;
 
 public sealed class SchemaTests
 {

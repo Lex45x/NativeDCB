@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace NativeDCB.Engine.Actors;
+namespace NativeDCB.Engine.Actors.Messages;
 
 internal sealed record IndexIdentity(string Database, string EventType, EventKeyMessage Key)
 {

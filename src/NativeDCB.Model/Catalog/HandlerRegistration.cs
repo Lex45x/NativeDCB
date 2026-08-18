@@ -2,7 +2,7 @@
 // ReSharper disable UnusedType.Global
 // ReSharper disable NotAccessedPositionalProperty.Global
 
-namespace NativeDCB.Model;
+namespace NativeDCB.Model.Catalog;
 
 public sealed record HandlerRegistration(
     string Name,

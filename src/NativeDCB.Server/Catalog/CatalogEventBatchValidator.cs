@@ -1,8 +1,10 @@
-using NativeDCB.Engine;
-using NativeDCB.Engine.Actors;
-using NativeDCB.Model;
+using NativeDCB.Engine.Actors.Contracts;
+using NativeDCB.Engine.Storage.EventLog;
+using NativeDCB.Model.Events;
+using NativeDCB.Server.Catalog.Schemas;
+using NativeDCB.Server.Databases;
 
-namespace NativeDCB.Server.Storage;
+namespace NativeDCB.Server.Catalog;
 
 public sealed class CatalogEventBatchValidator(DatabaseRegistry registry) : IEventBatchValidator
 {

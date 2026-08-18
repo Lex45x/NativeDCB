@@ -1,4 +1,4 @@
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.State;
 
 public sealed record CommandState(
     Guid CommandId,

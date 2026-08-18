@@ -1,9 +1,12 @@
 using System.Linq.Expressions;
 using System.Reflection;
 
-using NativeDCB.Model;
+using NativeDCB.Model.Events;
+using NativeDCB.Model.Queries;
+using NativeDCB.Sdk.Decisions.Diagnostics;
+using NativeDCB.Sdk.Schemas;
 
-namespace NativeDCB.Sdk;
+namespace NativeDCB.Sdk.Decisions.Compilation;
 
 internal static class PredicateTranslator
 {

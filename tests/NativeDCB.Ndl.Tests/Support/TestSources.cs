@@ -1,4 +1,4 @@
-namespace NativeDCB.Ndl.Tests;
+namespace NativeDCB.Ndl.Tests.Support;
 
 internal static class TestSources
 {

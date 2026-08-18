@@ -1,4 +1,4 @@
-namespace NativeDCB.Engine;
+namespace NativeDCB.Engine.Storage.EventLog;
 
 public sealed record PartitionCheckpoint(
     int PartitionNumber,

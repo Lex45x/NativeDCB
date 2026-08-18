@@ -1,4 +1,4 @@
-namespace NativeDCB.Server.Runtime;
+namespace NativeDCB.Server.Decisions.Execution;
 
 internal enum DecisionOutcome
 {
