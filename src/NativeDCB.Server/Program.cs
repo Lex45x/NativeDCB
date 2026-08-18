@@ -56,5 +56,5 @@ app.Run();
 // ReSharper disable once ClassNeverInstantiated.Global -- WebApplicationFactory discovers the ASP.NET entry point.
 namespace NativeDCB.Server
 {
-    public partial class Program;
+    public class Program;
 }

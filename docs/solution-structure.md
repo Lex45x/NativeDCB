@@ -45,6 +45,8 @@ The storage-neutral contract library defines:
 
 It has no Orleans, protobuf, filesystem, NDL, SDK, or web dependency.
 
+Files are grouped physically under `Catalog`, `Databases`, `Events`, `Queries`, and `Decisions`; decision evaluation and expression nodes have dedicated nested folders.
+
 ### `NativeDCB.Protocol`
 
 `Protos/v1/nativedcb.proto` is the single versioned protobuf source. The build generates both clients and server bases in `NativeDCB.Protocol.V1`. It contains all six public services and shared messages; generated C# is build output.
@@ -52,6 +54,8 @@ It has no Orleans, protobuf, filesystem, NDL, SDK, or web dependency.
 ### `NativeDCB.Ndl`
 
 The NDL library implements source text and spans, lexing, parsing with recovery diagnostics, syntax records, canonical formatting, compilation to `NativeDCB.Model.DecisionPlan`, and diagnostic-bearing conversion of representable plans back to canonical NDL. It references only `NativeDCB.Model`. Schema-aware semantic validation and execution live in the server, not in this library.
+
+Its physical folders separate `Text`, `Diagnostics`, `Lexing`, `Parsing`, `Syntax`, `Compilation`, and `Formatting`. Syntax expressions and statements are nested beneath `Syntax`.
 
 ### `NativeDCB.Engine`
 
@@ -65,19 +69,27 @@ The engine implements JSON/NDJSON persistence and Orleans grain contracts/implem
 
 The engine references `NativeDCB.Model` and Orleans. It does not host gRPC or execute NDL decisions.
 
+Actor files are physically separated into `Contracts`, `Messages`, `Mapping`, and `Grains`. Storage is grouped into `EventLog`, `Indexes`, and `State`.
+
 ### `NativeDCB.Server`
 
 The ASP.NET Core server hosts an Orleans localhost cluster, all generated gRPC service implementations, registry/catalog storage, schema validation, the Transaction grain, and the NDL/plan runtime. It maps protocol messages to model/actor messages and exposes HTTP liveness/readiness endpoints. All six services support native HTTP/2 gRPC and gRPC-Web; cross-origin browser access is restricted by `GrpcWeb:AllowedOrigins`.
 
 The Transaction grain is in the server because it executes captured handler plans and depends on server catalog/schema types. See [Internal Engine](internal-engine.md).
 
+Server files are grouped physically by `Grpc`, `Databases`, `Catalog`, and `Decisions`; gRPC infrastructure, schema handling, execution, and transactions use nested folders.
+
 ### `NativeDCB.Sdk`
 
 The runtime SDK provides schema attributes and reflection descriptors, JSON Schema generation, consistency-key encoding, the typed fluent decision builder and plan compiler, request builders/mappers, and a gRPC client wrapping every RPC across Database, Catalog, Command, Event, Statement, and Administration services. Its NuGet package embeds the analyzer and generator DLLs as standard C# analyzer assets.
 
+SDK files are grouped physically under `Schemas`, `Decisions/Authoring`, `Decisions/Compilation`, `Decisions/Diagnostics`, and `Client`.
+
 ### `NativeDCB.Cli`
 
 The `nativedcb` console application is a native gRPC client for all 29 RPCs. It supports JSON and NDL from command arguments, files, or standard input; query/key convenience inputs; JSON/JSONL output; streaming cancellation; and stable process exit codes. It defaults to the native HTTP/2 endpoint `http://localhost:5010`. See [CLI](cli.md).
+
+CLI implementation files are grouped under `Application`, `Arguments`, `IO`, and `Presentation`, with `Program.cs` remaining at the project root.
 
 ### `NativeDCB.Sdk.Analyzers` and `NativeDCB.Sdk.Generators`
 
@@ -91,6 +103,8 @@ These are separate `netstandard2.0` Roslyn projects. Each packs its DLL under `a
 The web console is a standalone Blazor WebAssembly application. It references only the public protocol, runs inside the browser's WebAssembly runtime boundary, and calls the NativeDCB server directly over gRPC-Web. There is no server-side application host or backend-for-frontend in this project; the development host only serves the static WebAssembly assets.
 
 Its single-page RPC workbench has explicit controls for all 29 methods across the six services. Navigation, method counts, request/response type metadata, and missing-wrapper detection are derived from generated protobuf descriptors; domain-heavy forms remain hand-authored. The prominent NDL editor drives validation, explanation, and streamed statement execution. Event reads, follow mode, subscriptions, and statement execution render stream items incrementally, and the active unary call or stream can be cancelled.
+
+The browser gRPC facade is under `Grpc`, descriptor discovery is nested under `Grpc/Discovery`, and Razor components retain their existing `Components/Layout` and `Components/Pages` grouping.
 
 `wwwroot/appsettings.json` is public browser configuration and defaults `NativeDCB:ServerAddress` to `https://localhost:7154`. Browser origins must also be present in the server's `GrpcWeb:AllowedOrigins`; the defaults cover the Web project's HTTP and HTTPS launch origins. This CORS allowlist does not provide authentication. The application does not persist operator history, consume external logs, authenticate users, or access database files directly.
 
@@ -129,7 +143,11 @@ There is no Web BFF or proxy boundary. External .NET applications can use `Nativ
 - The end-to-end project has an in-process authoring-equivalence test and a process-level test that launches the built server on isolated ports with a temporary database root. The process test loads the exact sample `CourseSubscriptions.ndl`, registers generated schemas and NDL/SDK handlers, subscribes, executes commands, and verifies streamed and persisted events through the real transport and storage path.
 - `samples/CourseSubscriptions` runs both analyzer projects and exposes explicit `seed` and `run` modes. Seed mode idempotently creates the database and registers all four schemas plus both NDL handlers and the fluent SDK handler without publishing events. Run mode seeds first and then executes the course/subscription scenario. The process-level end-to-end test launches seed mode twice, verifies the catalog at head zero, and then verifies live and persisted events.
 
+The sample keeps its host and NDL document at the project root and groups domain types physically into `Commands`, `Events`, and `Models`.
+
 All current tests use xUnit and temporary directories where storage is involved.
+
+Test files mirror the corresponding physical production areas where useful, while retaining their existing project-level namespaces. The physical folder cleanup intentionally leaves namespace migration to a separate ReSharper refactor.
 
 ## Not Yet Implemented
 

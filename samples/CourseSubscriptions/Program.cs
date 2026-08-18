@@ -4,8 +4,14 @@ using NativeDCB.Generated;
 using NativeDCB.Protocol.V1;
 using NativeDCB.Sdk;
 
-string address = args.ElementAtOrDefault(index: 0) ?? "http://localhost:5010";
-string database = args.ElementAtOrDefault(index: 1) ?? "school";
+string mode = args.ElementAtOrDefault(index: 0) ?? "run";
+string address = args.ElementAtOrDefault(index: 1) ?? "http://localhost:5010";
+string database = args.ElementAtOrDefault(index: 2) ?? "school";
+if (mode is not ("seed" or "run"))
+{
+    throw new ArgumentException("Mode must be either 'seed' or 'run'.", nameof(args));
+}
+
 using NativeDcbClient client = new(address);
 
 Console.WriteLine($"Generated {NativeDcbGeneratedSchemas.Create().Count} schema descriptors.");
@@ -36,6 +42,12 @@ DecisionDefinition<SubscribeStudentToCourse> sdkDefinition = Decision.WithDecisi
         ? Decision.Accept(new StudentSubscribedToCourse(command.StudentId, command.CourseId))
         : Decision.Reject("Course does not exist"));
 await client.RegisterDecisionAsync(database, "SubscribeStudentSdk", sdkDefinition);
+
+Console.WriteLine($"Seeded database '{database}'.");
+if (mode == "seed")
+{
+    return;
+}
 
 ExecuteHandlerResponse define = await client.ExecuteHandlerAsync(
     database,
