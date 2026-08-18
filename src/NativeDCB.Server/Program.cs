@@ -1,7 +1,11 @@
 using NativeDCB.Engine.Actors;
+using NativeDCB.Engine.Actors.Contracts;
 using NativeDCB.Model;
-using NativeDCB.Server.Services;
-using NativeDCB.Server.Storage;
+using NativeDCB.Model.Databases;
+using NativeDCB.Server.Catalog;
+using NativeDCB.Server.Databases;
+using NativeDCB.Server.Grpc;
+using NativeDCB.Server.Grpc.Infrastructure;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
@@ -54,4 +58,7 @@ app.MapGet("/health/ready", () => registry.List().All(entry => entry.Status is
 app.Run();
 
 // ReSharper disable once ClassNeverInstantiated.Global -- WebApplicationFactory discovers the ASP.NET entry point.
-public partial class Program;
+namespace NativeDCB.Server
+{
+    public class Program;
+}
