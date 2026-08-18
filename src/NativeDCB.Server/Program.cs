@@ -4,6 +4,7 @@ using NativeDCB.Model;
 using NativeDCB.Model.Databases;
 using NativeDCB.Server.Catalog;
 using NativeDCB.Server.Databases;
+using NativeDCB.Server.Decisions.Remote;
 using NativeDCB.Server.Grpc;
 using NativeDCB.Server.Grpc.Infrastructure;
 
@@ -28,6 +29,9 @@ builder.Services.AddCors(options => options.AddPolicy("GrpcWeb", policy =>
 }));
 builder.Services.AddSingleton<GrpcExceptionInterceptor>();
 builder.Services.Configure<ServerOptions>(builder.Configuration);
+builder.Services.Configure<RemoteDecisionOptions>(builder.Configuration.GetSection("RemoteDecisions"));
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<RemoteDecisionTokenProtector>();
 builder.Services.AddSingleton<DatabaseRegistry>();
 builder.Services.AddSingleton<IDatabaseStoreProvider>(services => services.GetRequiredService<DatabaseRegistry>());
 builder.Services.AddSingleton<IEventBatchValidator, CatalogEventBatchValidator>();

@@ -34,73 +34,14 @@ internal sealed class NdlDecisionRuntime
         JsonElement command,
         GrainCancellationToken cancellationToken)
     {
-        if (!string.Equals(
-                handler.PlanFingerprint,
-                DatabaseRegistry.Fingerprint(handler.PlanJson),
-                StringComparison.Ordinal))
-        {
-            throw new InvalidDataException($"Stored handler plan '{handler.Name}' failed fingerprint validation.");
-        }
-
-        DecisionPlan decision = handler.ParsePlan();
         IMainWriterGrain writer = grains.GetGrain<IMainWriterGrain>(database);
-        IReadGrain reader = grains.GetGrain<IReadGrain>(database);
-        IIndexCoordinatorGrain indexes = grains.GetGrain<IIndexCoordinatorGrain>(database);
         while (true)
         {
             cancellationToken.CancellationToken.ThrowIfCancellationRequested();
-            EventQuery query = BuildQuery(decision, command, eventSchemas);
-            WriterStateMessage writerState = await writer.GetStateAsync(cancellationToken);
-            long observedHead = writerState.Head;
-            EventQueryMessage queryMessage = ActorMessageMapper.ToMessage(query);
-            IndexReadResultMessage indexed = await indexes.ReadAsync(queryMessage, cancellationToken);
-            IReadOnlyList<SequencedEvent> events;
-            if (indexed.Supported)
-            {
-                EventListMessage tail = indexed.IndexHead < observedHead
-                    ? await reader.ReadByQueryAsync(queryMessage, observedHead, cancellationToken)
-                    : new EventListMessage([]);
-                events = indexed.Events
-                    .Where(value => value.EventId <= observedHead)
-                    .Concat(tail.Events.Where(value => value.EventId > indexed.IndexHead))
-                    .GroupBy(value => value.EventId)
-                    .Select(value => ActorMessageMapper.ToModel(value.First()))
-                    .OrderBy(value => value.EventId)
-                    .ToArray();
-            }
-            else
-            {
-                EventListMessage hydrated = await reader.ReadByQueryAsync(
-                    queryMessage, observedHead, cancellationToken);
-                events = hydrated.Events
-                    .Select(ActorMessageMapper.ToModel)
-                    .OrderBy(value => value.EventId)
-                    .ToArray();
-            }
-
-            Dictionary<string, object?> model = new(StringComparer.Ordinal);
-            foreach (SequencedEvent persisted in events)
-            {
-                object? eventValue = ConvertJson(persisted.Data);
-                foreach (PlanInclude include in decision.Includes.Where(x => x.EventType == persisted.Type))
-                {
-                    Dictionary<string, object?> scope = BaseScope(decision, command, model);
-                    scope[include.Alias] = eventValue;
-                    scope["event"] = eventValue;
-                    scope["position"] = persisted.EventId;
-                    if (!ToBoolean(Evaluate(include.Where, scope)))
-                    {
-                        continue;
-                    }
-
-                    Dictionary<string, object?> previous = new(model, StringComparer.Ordinal);
-                    scope["previous"] = previous;
-                    foreach (PlanAssignment assignment in include.Assignments)
-                    {
-                        model[assignment.Name] = Evaluate(assignment.Value, scope);
-                    }
-                }
-            }
+            PreparedDecisionResult prepared = await PrepareAsync(
+                grains, database, handler, eventSchemas, command, cancellationToken, serializeModel: false);
+            DecisionPlan decision = prepared.Plan;
+            Dictionary<string, object?> model = prepared.StructuralModel;
 
             Dictionary<string, object?> evaluateScope = BaseScope(decision, command, model);
             foreach (PlanEvaluationStep statement in decision.Evaluation)
@@ -145,7 +86,7 @@ internal sealed class NdlDecisionRuntime
 
             AppendResultMessage append = await writer.AppendAsync(
                 ActorMessageMapper.ToMessage(new EventBatch(commandId, handler.CommandType, candidates)),
-                ActorMessageMapper.ToMessage(new AppendCondition(query, observedHead)),
+                ActorMessageMapper.ToMessage(new AppendCondition(prepared.Query, prepared.ObservedHead)),
                 cancellationToken);
             if (append.Outcome == AppendResultOutcome.Conflict)
             {
@@ -156,6 +97,117 @@ internal sealed class NdlDecisionRuntime
             return append.Outcome == AppendResultOutcome.AlreadyCommitted
                 ? DecisionExecution.AlreadyCommitted(committed)
                 : DecisionExecution.Committed(committed);
+        }
+    }
+
+    public async Task<PreparedDecisionResult> PrepareAsync(
+        IGrainFactory grains,
+        string database,
+        HandlerCatalogEntry handler,
+        IReadOnlyDictionary<string, RegisteredJsonSchema> eventSchemas,
+        JsonElement command,
+        GrainCancellationToken cancellationToken,
+        bool serializeModel = true)
+    {
+        if (!string.Equals(
+                handler.PlanFingerprint,
+                DatabaseRegistry.Fingerprint(handler.PlanJson),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"Stored handler plan '{handler.Name}' failed fingerprint validation.");
+        }
+
+        DecisionPlan decision = handler.ParsePlan();
+        EventQuery query = BuildQuery(decision, command, eventSchemas);
+        IMainWriterGrain writer = grains.GetGrain<IMainWriterGrain>(database);
+        IReadGrain reader = grains.GetGrain<IReadGrain>(database);
+        IIndexCoordinatorGrain indexes = grains.GetGrain<IIndexCoordinatorGrain>(database);
+        WriterStateMessage writerState = await writer.GetStateAsync(cancellationToken);
+        long observedHead = writerState.Head;
+        EventQueryMessage queryMessage = ActorMessageMapper.ToMessage(query);
+        IndexReadResultMessage indexed = await indexes.ReadAsync(queryMessage, cancellationToken);
+        IReadOnlyList<SequencedEvent> events;
+        if (indexed.Supported)
+        {
+            EventListMessage tail = indexed.IndexHead < observedHead
+                ? await reader.ReadByQueryAsync(queryMessage, observedHead, cancellationToken)
+                : new EventListMessage([]);
+            events = indexed.Events
+                .Where(value => value.EventId <= observedHead)
+                .Concat(tail.Events.Where(value => value.EventId > indexed.IndexHead))
+                .GroupBy(value => value.EventId)
+                .Select(value => ActorMessageMapper.ToModel(value.First()))
+                .OrderBy(value => value.EventId)
+                .ToArray();
+        }
+        else
+        {
+            EventListMessage hydrated = await reader.ReadByQueryAsync(queryMessage, observedHead, cancellationToken);
+            events = hydrated.Events
+                .Select(ActorMessageMapper.ToModel)
+                .OrderBy(value => value.EventId)
+                .ToArray();
+        }
+
+        Dictionary<string, object?> model = Replay(decision, command, events);
+        byte[] modelJson = [];
+        if (serializeModel)
+        {
+            EnsureInitialized(model);
+            modelJson = JsonSerializer.SerializeToUtf8Bytes(model, DatabaseRegistry.JsonOptions);
+        }
+
+        return new PreparedDecisionResult(decision, query, observedHead, modelJson, model);
+    }
+
+    private static Dictionary<string, object?> Replay(
+        DecisionPlan decision,
+        JsonElement command,
+        IReadOnlyList<SequencedEvent> events)
+    {
+        Dictionary<string, object?> model = new(StringComparer.Ordinal);
+        foreach (SequencedEvent persisted in events)
+        {
+            object? eventValue = ConvertJson(persisted.Data);
+            foreach (PlanInclude include in decision.Includes.Where(x => x.EventType == persisted.Type))
+            {
+                Dictionary<string, object?> scope = BaseScope(decision, command, model);
+                scope[include.Alias] = eventValue;
+                scope["event"] = eventValue;
+                scope["position"] = persisted.EventId;
+                if (!ToBoolean(Evaluate(include.Where, scope)))
+                {
+                    continue;
+                }
+
+                Dictionary<string, object?> previous = new(model, StringComparer.Ordinal);
+                scope["previous"] = previous;
+                foreach (PlanAssignment assignment in include.Assignments)
+                {
+                    model[assignment.Name] = Evaluate(assignment.Value, scope);
+                }
+            }
+        }
+
+        return model;
+    }
+
+    private static void EnsureInitialized(object? value)
+    {
+        if (ReferenceEquals(value, Missing))
+        {
+            throw new InvalidOperationException("The prepared decision model contains an uninitialized value.");
+        }
+
+        IEnumerable<object?> children = value switch
+        {
+            Dictionary<string, object?> dictionary => dictionary.Values,
+            object?[] array => array,
+            _ => []
+        };
+        foreach (object? child in children)
+        {
+            EnsureInitialized(child);
         }
     }
 

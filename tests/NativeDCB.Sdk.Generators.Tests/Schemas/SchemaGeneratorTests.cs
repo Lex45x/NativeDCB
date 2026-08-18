@@ -10,7 +10,7 @@ public sealed class SchemaGeneratorTests
     {
         const string source = """
                               using System;
-                              namespace NativeDCB.Sdk
+                              namespace NativeDCB.Sdk.Schemas
                               {
                                   [AttributeUsage(AttributeTargets.Class)]
                                   public sealed class EventTypeAttribute(string name) : Attribute { }
@@ -18,9 +18,9 @@ public sealed class SchemaGeneratorTests
                                   public sealed class CommandTypeAttribute(string name) : Attribute { }
                               }
 
-                              [NativeDCB.Sdk.CommandType("z-command")]
+                              [NativeDCB.Sdk.Schemas.CommandType("z-command")]
                               public sealed record Command(string Id);
-                              [NativeDCB.Sdk.EventType("a-event")]
+                              [NativeDCB.Sdk.Schemas.EventType("a-event")]
                               public sealed record Event(string Id);
                               """;
         CSharpCompilation compilation = CreateCompilation(source);

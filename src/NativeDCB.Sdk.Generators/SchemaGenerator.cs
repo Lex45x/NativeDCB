@@ -12,9 +12,9 @@ public sealed class SchemaGenerator : IIncrementalGenerator
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         IncrementalValuesProvider<SchemaType> events = Schemas(
-            context, "NativeDCB.Sdk.EventTypeAttribute", isEvent: true);
+            context, "NativeDCB.Sdk.Schemas.EventTypeAttribute", isEvent: true);
         IncrementalValuesProvider<SchemaType> commands = Schemas(
-            context, "NativeDCB.Sdk.CommandTypeAttribute", isEvent: false);
+            context, "NativeDCB.Sdk.Schemas.CommandTypeAttribute", isEvent: false);
         context.RegisterSourceOutput(
             events.Collect().Combine(commands.Collect()),
             static (productionContext, schemas) => Emit(productionContext, schemas.Left, schemas.Right));
@@ -51,15 +51,15 @@ public sealed class SchemaGenerator : IIncrementalGenerator
 
                                           public static class NativeDcbGeneratedSchemas
                                           {
-                                              public static global::System.Collections.Generic.IReadOnlyList<global::NativeDCB.Sdk.SchemaDescriptor> Create()
+                                              public static global::System.Collections.Generic.IReadOnlyList<global::NativeDCB.Sdk.Schemas.SchemaDescriptor> Create()
                                               {
-                                                  return new global::NativeDCB.Sdk.SchemaDescriptor[]
+                                                  return new global::NativeDCB.Sdk.Schemas.SchemaDescriptor[]
                                                   {
 
                                           """);
         foreach (SchemaType schema in schemas)
         {
-            source.Append("            global::NativeDCB.Sdk.SchemaDescriptor.")
+            source.Append("            global::NativeDCB.Sdk.Schemas.SchemaDescriptor.")
                 .Append(schema.IsEvent ? "ForEvent" : "ForCommand")
                 .Append(value: '<').Append(schema.TypeName).AppendLine(">(),");
         }

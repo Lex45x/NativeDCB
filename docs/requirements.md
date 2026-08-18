@@ -1,7 +1,7 @@
 # NativeDCB Requirements
 
 Status: requirements reconciled with the current implementation  
-Last verified: 2026-08-14
+Last verified: 2026-08-18
 
 ## Purpose
 
@@ -19,18 +19,19 @@ This document does not remove unmet requirements. Each area is marked **Implemen
 | One writer per database | Implemented | Main Writer grain plus in-process store gate and exclusive `store.lock`. |
 | Consistent decision snapshot and boundary retry | Implemented | Transaction captures writer head, reads through it, and retries append conflicts until request cancellation/fault. |
 | Command-ID reconciliation | Implemented | A command ID maps to at most one committed batch and duplicate execution returns `AlreadyCommitted`. |
+| Optional remote decision prepare/complete | Implemented | Preparation returns a hydrated structural model plus an HMAC capability; completion performs one catalog-checked conditional append and reports stale rather than retrying. |
 | JSON/NDJSON partitions and crash recovery | Implemented | See [Internal Engine](internal-engine.md). |
 | Durable current schema/handler catalog | Implemented | `catalog_v1.json` is atomically replaced using a temporary file. |
 | Optional schema validation | Partial | A deliberately small JSON Schema profile is implemented; no general JSON Schema engine or schema history exists. |
 | NDL authoring and execution | Partial | Decisions compile and execute. Explain/Execute validate every decision and reject duplicate names; Execute atomically registers all decisions only when the document is valid. Statements still only register handlers, and semantic/type analysis is limited. |
 | Fluent .NET authoring | Partial | Schema, builder, plan, and client APIs exist; expression coverage and analyzer/generator coverage are limited. |
-| Derived full-event indexes | Implemented | Public eventual reads can return the index snapshot; transactions combine indexed matches with an authoritative committed tail through the captured writer head. |
+| Derived full-event indexes | Implemented | Public eventual reads can return the index snapshot; local and remote decision hydration combines indexed matches with an authoritative committed tail through the captured writer head. |
 | Cumulative state files | Implemented as optional recovery checkpoints | A valid full-event checkpoint restores writer state through a closed partition and only the remaining partitions replay; invalid checkpoints are ignored and full authoritative replay remains the fallback. |
 | Read availability without writer ownership | Partial | Finite EventService snapshot/query/type-and-key reads and command-ID reconciliation recover a committed head from shared partition reads when the store is not open. Follow/subscription, mutations, and `GetHead` still require writer activation; concurrent in-process activation/recovery has no separately specified synchronization guarantee. |
 | Buffered/grouped flush and pending reservations | Not implemented | Each append writes and flushes one batch under serialized writer access. |
 | Multi-silo deployment | Not implemented | Server uses `UseLocalhostClustering`; filesystem coordination is single-process. |
 | Native gRPC and browser gRPC-Web transports | Implemented | All six services expose both transports; browser origins come from `GrpcWeb:AllowedOrigins`. |
-| Security, audit, observability, backup/restore | Not implemented | No authentication, authorization, audit sink, metrics/tracing, backup, or restore facility is configured. |
+| Security, audit, observability, backup/restore | Not implemented | Remote capabilities are HMAC-authenticated bearer values, but there is no caller authentication, authorization, audit sink, metrics/tracing, backup, or restore facility. |
 
 ## Core Invariants
 
@@ -66,6 +67,20 @@ Current execution is:
 9. On conflict, discard the model and repeat. Cancellation/deadline and permanent failures terminate the attempt.
 
 There is no special no-history rejection. Decisions can create an entity from an empty history by using `exists(...)` and accepting when it is false, as the integration tests do. An accepted plan must emit at least one event.
+
+### Remote decision semantics
+
+The optional two-step path uses the same registered plan and hydration code but moves final event selection to a client:
+
+1. `PrepareDecision` validates the command and derives the full matching query from plan includes.
+2. It captures the Main Writer head, combines supported index matches with an authoritative committed tail (or scans when unsupported), orders/deduplicates events, and replays include reducers into the structural model.
+3. It verifies that the model contains no uninitialized values and returns its JSON with an expiring HMAC capability. Evaluation locals, requirements, decision expressions, and emissions do not run during preparation.
+4. The capability binds database/store, command identity/hash, handler/plan, observed query/head, the ordered emission-type sequence, and relevant command/included/emitted schema fingerprints. The server persists no preparation record.
+5. `CompleteDecision` requires proposed event type/object payload pairs to match the plan's emission order and count, verifies current relevant catalog state, validates current event schemas, and derives keys server-side.
+6. It performs one append. A matching event after the observed head returns `stale`; unrelated head movement does not. There is no automatic server, SDK, or CLI retry.
+7. Command-ID reconciliation occurs before expiry/catalog/event checks. The first completion to commit wins and later replays return `already_committed`.
+
+The capability is opaque application data and a bearer credential, not authentication or encryption. Possession permits an attempt to complete with schema-valid payloads matching the plan's ordered emission types; the server does not receive the hydrated model back or prove how the client derived its proposal. Remote decisions still require an executable plan with emissions. Model-only plans, including the separate work tracked by issue #15, are not implemented here.
 
 ## Schema Profile
 
@@ -106,7 +121,7 @@ State files and indexes are not authoritative. A state file accelerates writer r
 
 ## Public Surface
 
-The implemented public protocol has Database, Catalog, Command, Event, Statement, and Administration services with 29 RPCs in total. All six services support native HTTP/2 gRPC and gRPC-Web. `NativeDcbClient` wraps every RPC while retaining a legacy constructor that exposes only its former Command/Event/Catalog subset. The native CLI and standalone Blazor WebAssembly console each expose the full 29-RPC surface; Web calls the server directly and has no BFF. Server integration covers a full SDK flow and browser-style gRPC-Web unary and streaming calls, while process-level end-to-end coverage launches a real server against temporary storage. Only committed events cross the API. Domain rejection and invalid command execution are command response outcomes; routing, lifecycle, data-loss, and infrastructure failures use gRPC status codes with protobuf `ErrorDetail` in the `native-dcb-error-bin` binary trailer. See [gRPC API](grpc-api.md) and [CLI](cli.md).
+The implemented public protocol has Database, Catalog, Command, Event, Statement, and Administration services with 31 RPCs in total. CommandService has four methods: `ExecuteHandler`, `PrepareDecision`, `CompleteDecision`, and `GetEventsByCommandId`. All six services support native HTTP/2 gRPC and gRPC-Web. `NativeDcbClient` wraps every RPC while retaining a legacy constructor that exposes only its former Command/Event/Catalog subset. The native CLI and standalone Blazor WebAssembly console each expose the full 31-RPC surface; Web calls the server directly and has no BFF. Server integration covers a full SDK flow, remote decisions, and browser-style gRPC-Web unary and streaming calls, while process-level end-to-end coverage launches a real server against temporary storage. Committed event reads expose only committed events; remote preparation additionally returns hydrated model JSON and an opaque signed capability. Domain rejection and invalid command execution are command response outcomes; routing, lifecycle, data-loss, and infrastructure failures use gRPC status codes with protobuf `ErrorDetail` in the `native-dcb-error-bin` binary trailer. See [gRPC API](grpc-api.md) and [CLI](cli.md).
 
 The browser endpoint in `NativeDCB.Web/wwwroot/appsettings.json` is public configuration. `GrpcWeb:AllowedOrigins` controls which origins browsers permit to read cross-origin responses, but CORS does not authenticate callers or authorize operations. No secrets belong in Web static assets, and the unauthenticated server and console must not be exposed to untrusted networks.
 

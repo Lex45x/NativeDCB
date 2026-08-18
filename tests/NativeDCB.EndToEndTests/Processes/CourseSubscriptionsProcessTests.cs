@@ -11,6 +11,9 @@ using NativeDCB.Protocol.V1;
 using NativeDCB.Sdk;
 using NativeDCB.Sdk.Client;
 
+// Test-only contracts are consumed through JSON serialization.
+// ReSharper disable ClassNeverInstantiated.Local
+// ReSharper disable NotAccessedPositionalProperty.Local
 namespace NativeDCB.EndToEndTests.Processes;
 
 public sealed class CourseSubscriptionsProcessTests
@@ -91,7 +94,7 @@ public sealed class CourseSubscriptionsProcessTests
                 new SubscribeEventsRequest { Database = database, AfterEventId = 0 },
                 cancellationToken: timeout.Token);
             Task<IReadOnlyList<EventEnvelope>> publishedTask = ReadEventsAsync(
-                subscription.ResponseStream, expectedCount: 3, timeout.Token);
+                subscription.ResponseStream, expectedCount: 4, timeout.Token);
 
             ExecuteHandlerResponse defined = await client.ExecuteHandlerAsync(
                 database,
@@ -108,30 +111,73 @@ public sealed class CourseSubscriptionsProcessTests
                 "SubscribeStudentSdk",
                 new SubscribeStudentToCourse("student-sdk", "native-dcb"),
                 cancellationToken: timeout.Token);
+            PreparedDecision<CourseModel> prepared = await client.PrepareDecisionAsync<
+                SubscribeStudentToCourse, CourseModel>(
+                database,
+                "SubscribeStudentSdk",
+                new SubscribeStudentToCourse("student-remote", "native-dcb"),
+                cancellationToken: timeout.Token);
+
+            Assert.True(prepared.IsPrepared);
+            Assert.True(prepared.Model.CourseExists);
+            CompleteDecisionResponse completed = await client.CompleteDecisionAsync(
+                database,
+                prepared.ModelSignature,
+                [
+                    new ProposedDecisionEvent(
+                        "StudentSubscribedToCourse",
+                        new StudentSubscribedToCourse("student-remote", "native-dcb"))
+                ],
+                timeout.Token);
+            CompleteDecisionResponse replayed = await client.CompleteDecisionAsync(
+                database,
+                prepared.ModelSignature,
+                [
+                    new ProposedDecisionEvent(
+                        "StudentSubscribedToCourse",
+                        new StudentSubscribedToCourse("ignored", "ignored"))
+                ],
+                timeout.Token);
 
             AssertCommitted(defined, eventId: 1, "CourseDefined");
             AssertCommitted(ndlSubscription, eventId: 2, "StudentSubscribedToCourse");
             AssertCommitted(sdkSubscription, eventId: 3, "StudentSubscribedToCourse");
+            Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Committed, completed.OutcomeCase);
+            Assert.Equal(expected: 4, completed.Committed.FirstEventId);
+            Assert.Equal(expected: 4, completed.Committed.LastEventId);
+            Assert.Equal("StudentSubscribedToCourse", Assert.Single(completed.Committed.Events).Type);
+            Assert.Equal(prepared.CommandId.ToString("D"), completed.CommandId);
+            Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.AlreadyCommitted, replayed.OutcomeCase);
+            Assert.Equal(expected: 4, replayed.AlreadyCommitted.FirstEventId);
+            Assert.Equal(expected: 4, replayed.AlreadyCommitted.LastEventId);
+            Assert.Equal(completed.CommandId, replayed.CommandId);
 
             IReadOnlyList<EventEnvelope> published = await publishedTask;
             IReadOnlyList<EventEnvelope> persisted = await ReadPersistedEventsAsync(
-                events, database, throughEventId: 3, timeout.Token);
-            Assert.Equal([1L, 2L, 3L], published.Select(@event => @event.EventId));
+                events, database, throughEventId: 4, timeout.Token);
+            Assert.Equal(expected: 4, published.Count);
+            Assert.Equal(expected: 4, persisted.Count);
+            Assert.Equal([1L, 2L, 3L, 4L], published.Select(@event => @event.EventId));
             Assert.Equal(published.Select(@event => @event.EventId), persisted.Select(@event => @event.EventId));
             Assert.Equal(
-                ["CourseDefined", "StudentSubscribedToCourse", "StudentSubscribedToCourse"],
+                [
+                    "CourseDefined", "StudentSubscribedToCourse", "StudentSubscribedToCourse",
+                    "StudentSubscribedToCourse"
+                ],
                 published.Select(@event => @event.Type));
-            Assert.Equal([defined.CommandId, ndlSubscription.CommandId, sdkSubscription.CommandId],
+            Assert.Equal([defined.CommandId, ndlSubscription.CommandId, sdkSubscription.CommandId, completed.CommandId],
                 published.Select(@event => @event.CommandId));
             Assert.All(published, @event => Assert.Equal(expected: 1U, @event.SchemaVersion));
 
             AssertPayload(published[index: 0], "native-dcb", capacity: 30);
             AssertPayload(published[index: 1], "student-ndl", "native-dcb");
             AssertPayload(published[index: 2], "student-sdk", "native-dcb");
+            AssertPayload(published[index: 3], "student-remote", "native-dcb");
             Assert.Equal([("course", "native-dcb")], Keys(published[index: 0]));
             Assert.Equal([("student", "student-ndl"), ("course", "native-dcb")], Keys(published[index: 1]));
             Assert.Equal([("student", "student-sdk"), ("course", "native-dcb")], Keys(published[index: 2]));
-            Assert.Equal(expected: 3L, (await client.GetHeadAsync(database, timeout.Token)).EventId);
+            Assert.Equal([("student", "student-remote"), ("course", "native-dcb")], Keys(published[index: 3]));
+            Assert.Equal(expected: 4L, (await client.GetHeadAsync(database, timeout.Token)).EventId);
         }
         finally
         {
@@ -162,6 +208,9 @@ public sealed class CourseSubscriptionsProcessTests
         startInfo.Environment["DatabaseRoot"] = databaseRoot;
         startInfo.Environment["Orleans__SiloPort"] = siloPort.ToString();
         startInfo.Environment["Orleans__GatewayPort"] = gatewayPort.ToString();
+        startInfo.Environment["RemoteDecisions__ActiveKeyId"] = "test";
+        startInfo.Environment["RemoteDecisions__SigningKeys__test"] =
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
 
         Process process = new() { StartInfo = startInfo };
         process.OutputDataReceived += (_, args) => Capture(output, "stdout", args.Data);
@@ -267,7 +316,10 @@ public sealed class CourseSubscriptionsProcessTests
     {
         ReadEventsByRangeRequest request = new()
         {
-            Database = database, AfterEventId = 0, ThroughEventId = throughEventId, Mode = ReadMode.Snapshot
+            Database = database,
+            AfterEventId = 0,
+            ThroughEventId = throughEventId,
+            Mode = ReadMode.Snapshot
         };
         using AsyncServerStreamingCall<EventEnvelope> call = events.ReadEventsByRange(
             request, cancellationToken: cancellationToken);
@@ -425,4 +477,8 @@ public sealed class CourseSubscriptionsProcessTests
         string CourseId,
         // ReSharper disable once NotAccessedPositionalProperty.Local -- Serialized as the command payload.
         int Capacity);
+
+    private sealed record CourseModel(bool CourseExists);
+
+    private sealed record StudentSubscribedToCourse(string StudentId, string CourseId);
 }

@@ -8,7 +8,10 @@ using Grpc.Net.Client.Web;
 
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 using NativeDCB.Model.Decisions;
 using NativeDCB.Protocol.V1;
@@ -18,6 +21,9 @@ using NativeDCB.Sdk.Schemas;
 
 using QueryItem = NativeDCB.Protocol.V1.QueryItem;
 
+// Test-only contracts are consumed through JSON serialization and schema reflection.
+// ReSharper disable ClassNeverInstantiated.Local
+// ReSharper disable NotAccessedPositionalProperty.Local
 namespace NativeDCB.Server.IntegrationTests.Grpc;
 
 public sealed class NativeDcbServerTests : IAsyncLifetime
@@ -73,22 +79,49 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
                                         };
                                         """;
 
-    private const string SchemaCompatibleSubscribeNdl = """
-                                                        decision SubscribeStudent
-                                                        from SubscribeStudentToCourse command
-                                                        | include CourseDefined event
-                                                            where event.CourseId == command.CourseId
-                                                            apply { CourseExists = true }
-                                                        | evaluate {
-                                                            require (model.CourseExists ?? false) else "Course does not exist";
-                                                        }
-                                                        | decide {
-                                                            emit StudentSubscribedToCourse {
-                                                                StudentId = command.StudentId,
-                                                                CourseId = command.CourseId
-                                                            };
-                                                        };
-                                                        """;
+    private const string SchemaCompatibleSubscribeNdl =
+        """
+        decision SubscribeStudent
+        from SubscribeStudentToCourse command
+        | include CourseDefined event
+            where event.CourseId == command.CourseId
+            apply { CourseExists = true }
+        | evaluate {
+            require (model.CourseExists ?? false) else "Course does not exist";
+        }
+        | decide {
+            emit StudentSubscribedToCourse {
+                StudentId = command.StudentId,
+                CourseId = command.CourseId
+            };
+        };
+        """;
+
+    private const string RemoteBatchNdl =
+        """
+        decision RemoteBatch
+        from SubscribeStudentToCourse command
+        | include CourseDefined event
+            where event.CourseId == command.CourseId
+            apply {
+                CourseExists = true,
+                CourseCapacity = event.Capacity
+            }
+        | evaluate {
+            require (model.CourseExists ?? false) else "Course does not exist";
+        }
+        | decide {
+            emit CourseDefined {
+                CourseId = command.CourseId,
+                Capacity = model.CourseCapacity
+            };
+            emit StudentSubscribedToCourse {
+                StudentId = command.StudentId,
+                CourseId = command.CourseId,
+                RemainingSeats = model.CourseCapacity - 1
+            };
+        };
+        """;
 
     private GrpcChannel _channel = null!;
 
@@ -132,7 +165,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         ExplainStatementResponse explained = await statements.ExplainStatementAsync(new ExplainStatementRequest
         {
-            Database = "school", NdlSource = SubscribeNdl
+            Database = "school",
+            NdlSource = SubscribeNdl
         });
         Assert.True(explained.Valid);
         Assert.Contains("emit:1", explained.Plan.Operations);
@@ -196,7 +230,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         GetHandlerResponse retained = await catalog.GetHandlerAsync(new GetHandlerRequest
         {
-            Database = "school", HandlerName = "SubscribeStudent"
+            Database = "school",
+            HandlerName = "SubscribeStudent"
         });
         Assert.Equal(subscribe.Handler.SourceFingerprint, retained.Handler.SourceFingerprint);
 
@@ -209,7 +244,10 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         CatalogService.CatalogServiceClient reopenedCatalog = new(_channel);
         GetHandlerResponse reopened = await reopenedCatalog.GetHandlerAsync(new GetHandlerRequest
         {
-            Database = "school", HandlerName = "SubscribeStudent", IncludePlanJson = true, GenerateNdl = true
+            Database = "school",
+            HandlerName = "SubscribeStudent",
+            IncludePlanJson = true,
+            GenerateNdl = true
         });
         Assert.Equal(subscribe.Handler.SourceFingerprint, reopened.Handler.SourceFingerprint);
         Assert.NotEmpty(reopened.Handler.PlanJson);
@@ -269,7 +307,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         RpcException missing = await Assert.ThrowsAsync<RpcException>(async () =>
             await commands.GetEventsByCommandIdAsync(new GetEventsByCommandIdRequest
             {
-                Database = "empty", CommandId = Guid.NewGuid().ToString("D")
+                Database = "empty",
+                CommandId = Guid.NewGuid().ToString("D")
             }));
         Assert.Equal(StatusCode.NotFound, missing.StatusCode);
         AssertErrorDetail(missing, "NotFound");
@@ -323,7 +362,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
             committed.Failed?.Error?.Message);
         await catalog.RemoveHandlerAsync(new RemoveHandlerRequest
         {
-            Database = "school", HandlerName = "DefineCourse"
+            Database = "school",
+            HandlerName = "DefineCourse"
         });
 
         ExecuteHandlerResponse duplicate = await commands.ExecuteHandlerAsync(new ExecuteHandlerRequest
@@ -379,7 +419,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         RebuildResponse rebuild = await administration.RequestStateRebuildAsync(new RequestStateRebuildRequest
         {
-            Database = "school", PartitionNumber = 1
+            Database = "school",
+            PartitionNumber = 1
         });
         Assert.True(rebuild.Accepted);
     }
@@ -443,7 +484,10 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         await RegisterAsync(catalog, "DefineCourse", "DefineCourse", CreateCourseNdl);
         using AsyncServerStreamingCall<EventEnvelope> follow = events.ReadEventsByRange(new ReadEventsByRangeRequest
         {
-            Database = "school", AfterEventId = 0, Mode = ReadMode.Follow, Limit = 1
+            Database = "school",
+            AfterEventId = 0,
+            Mode = ReadMode.Follow,
+            Limit = 1
         });
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(seconds: 10));
         Task<bool> moved = follow.ResponseStream.MoveNext(timeout.Token);
@@ -496,11 +540,14 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         ReadEventsByQueryRequest eventualRequest = new()
         {
-            Database = "school", Consistency = QueryConsistency.EventualIndex, Query = new Query()
+            Database = "school",
+            Consistency = QueryConsistency.EventualIndex,
+            Query = new Query()
         };
         eventualRequest.Query.Items.Add(new QueryItem
         {
-            EventTypes = { "CourseDefined" }, Keys = { new KeyValue { Key = "CourseId", Value = "course-1" } }
+            EventTypes = { "CourseDefined" },
+            Keys = { new KeyValue { Key = "CourseId", Value = "course-1" } }
         });
         IReadOnlyList<EventEnvelope> indexedEvents = await ReadAllAsync(
             events.ReadEventsByQuery(eventualRequest).ResponseStream);
@@ -568,20 +615,25 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         ListSchemasResponse commandSchemas = await catalog.ListSchemasAsync(new ListSchemasRequest
         {
-            Database = "school", SchemaKind = SchemaKind.Command
+            Database = "school",
+            SchemaKind = SchemaKind.Command
         });
         Assert.Equal("DefineCourse", Assert.Single(commandSchemas.Schemas).SchemaName);
 
         GetSchemaResponse inspectedSchema = await catalog.GetSchemaAsync(new GetSchemaRequest
         {
-            Database = "school", SchemaName = "CourseDefined", SchemaKind = SchemaKind.Event
+            Database = "school",
+            SchemaName = "CourseDefined",
+            SchemaKind = SchemaKind.Event
         });
         Assert.Equal(eventSchema, inspectedSchema.Schema.SchemaDocumentJson.ToStringUtf8());
         Assert.Equal(schemas.Schemas[index: 0].Fingerprint, inspectedSchema.Schema.Fingerprint);
         RpcException missingSchema = await Assert.ThrowsAsync<RpcException>(async () =>
             await catalog.GetSchemaAsync(new GetSchemaRequest
             {
-                Database = "school", SchemaName = "Missing", SchemaKind = SchemaKind.Event
+                Database = "school",
+                SchemaName = "Missing",
+                SchemaKind = SchemaKind.Event
             }));
         Assert.Equal(StatusCode.NotFound, missingSchema.StatusCode);
 
@@ -701,7 +753,9 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         Assert.True(directRegistration.Handler.Valid);
         GetHandlerResponse failedGeneration = await catalog.GetHandlerAsync(new GetHandlerRequest
         {
-            Database = "school", HandlerName = "Unrepresentable", GenerateNdl = true
+            Database = "school",
+            HandlerName = "Unrepresentable",
+            GenerateNdl = true
         });
         Assert.Empty(failedGeneration.Handler.GeneratedNdl);
         Assert.Equal("NDL3001", Assert.Single(failedGeneration.Handler.NdlGenerationDiagnostics).Code);
@@ -766,6 +820,359 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         Assert.NotEmpty((await client.ListPartitionsAsync("school")).Partitions);
     }
 
+    [Fact]
+    public async Task Remote_decision_prepares_model_completes_with_derived_keys_and_replays()
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        Guid commandId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school", "SubscribeStudent", new SubscribeSdk("student-1", "course-1"), commandId);
+
+        Assert.Equal(new RemoteSubscribeModel(CourseExists: true, CourseCapacity: 2), prepared.Model);
+        Assert.NotEmpty(prepared.ModelSignature);
+        CompleteDecisionResponse completed = await client.CompleteDecisionAsync(
+            "school",
+            prepared.ModelSignature,
+            [
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1))
+            ]);
+
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Committed, completed.OutcomeCase);
+        EventEnvelope persisted = Assert.Single(completed.Committed.Events);
+        Assert.Equal(["student", "course"], persisted.Keys.Select(value => value.Key));
+        Assert.Equal(["student-1", "course-1"], persisted.Keys.Select(value => value.Value));
+
+        CompleteDecisionResponse replayed = await client.CompleteDecisionAsync(
+            "school",
+            prepared.ModelSignature,
+            [
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("ignored", "ignored", RemainingSeats: 0))
+            ]);
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.AlreadyCommitted, replayed.OutcomeCase);
+        Assert.Equal(expected: 2, replayed.AlreadyCommitted.FirstEventId);
+    }
+
+    [Fact]
+    public async Task Remote_decision_rejects_tampered_signature()
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school",
+            "SubscribeStudent",
+            new SubscribeSdk("student-1", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000002"));
+        byte[] tampered = prepared.ModelSignature.ToByteArray();
+        tampered[^1] ^= 0x01;
+
+        RpcException exception = await Assert.ThrowsAsync<RpcException>(() => client.CompleteDecisionAsync(
+            "school",
+            ByteString.CopyFrom(tampered),
+            [
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1))
+            ]));
+
+        Assert.Equal(StatusCode.InvalidArgument, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task Remote_decision_requires_the_plan_emission_order_and_count()
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school",
+            "SubscribeStudent",
+            new SubscribeSdk("student-1", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000002"));
+
+        CompleteDecisionResponse completed = await client.CompleteDecisionAsync(
+            "school",
+            prepared.ModelSignature,
+            [
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1)),
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("student-2", "course-1", RemainingSeats: 0))
+            ]);
+
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Failed, completed.OutcomeCase);
+        Assert.Equal("InvalidEvents", completed.Failed.Error.Code);
+        Assert.Equal(expected: 1, (await new DatabaseService.DatabaseServiceClient(_channel)
+            .GetHeadAsync(new GetHeadRequest { Database = "school" })).EventId);
+    }
+
+    [Fact]
+    public async Task Remote_decision_enforces_distinct_emission_order_and_accepts_the_exact_sequence()
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        RegisterHandlerResponse registered = await RegisterAsync(
+            new CatalogService.CatalogServiceClient(_channel),
+            "RemoteBatch",
+            "SubscribeStudentToCourse",
+            RemoteBatchNdl);
+        Assert.True(registered.Handler.Valid,
+            string.Join(Environment.NewLine, registered.Handler.Diagnostics.Select(value => value.Message)));
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school",
+            "RemoteBatch",
+            new SubscribeSdk("student-1", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000002"));
+        ProposedDecisionEvent course = new("CourseDefined", new CourseDefinedSdk("course-1", Capacity: 2));
+        ProposedDecisionEvent subscription = new(
+            "StudentSubscribedToCourse",
+            new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1));
+
+        CompleteDecisionResponse reordered = await client.CompleteDecisionAsync(
+            "school", prepared.ModelSignature, [subscription, course]);
+        CompleteDecisionResponse completed = await client.CompleteDecisionAsync(
+            "school", prepared.ModelSignature, [course, subscription]);
+
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Failed, reordered.OutcomeCase);
+        Assert.Equal("InvalidEvents", reordered.Failed.Error.Code);
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Committed, completed.OutcomeCase);
+        Assert.Equal(["CourseDefined", "StudentSubscribedToCourse"],
+            completed.Committed.Events.Select(value => value.Type));
+    }
+
+    [Fact]
+    public async Task Remote_decision_matching_intervening_event_is_stale_and_appends_nothing()
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school",
+            "SubscribeStudent",
+            new SubscribeSdk("student-1", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000002"));
+        ExecuteHandlerResponse intervening = await client.ExecuteHandlerAsync(
+            "school",
+            "SubscribeStudent",
+            new SubscribeSdk("student-2", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000003"));
+        Assert.Equal(ExecuteHandlerResponse.OutcomeOneofCase.Committed, intervening.OutcomeCase);
+
+        CompleteDecisionResponse completed = await client.CompleteDecisionAsync(
+            "school",
+            prepared.ModelSignature,
+            [
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1))
+            ]);
+
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Stale, completed.OutcomeCase);
+        Assert.Equal(expected: 2, completed.Stale.CurrentHead);
+        IReadOnlyList<EventEnvelope> persisted = await ReadAllAsync(new EventService.EventServiceClient(_channel)
+            .ReadEventsByRange(new ReadEventsByRangeRequest { Database = "school", AfterEventId = 0 }).ResponseStream);
+        Assert.Equal(expected: 2, persisted.Count);
+    }
+
+    [Fact]
+    public async Task Remote_decision_unrelated_intervening_event_does_not_stale_model()
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school",
+            "SubscribeStudent",
+            new SubscribeSdk("student-1", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000002"));
+        ExecuteHandlerResponse intervening = await client.ExecuteHandlerAsync(
+            "school",
+            "DefineCourse",
+            new DefineCourseSdk("course-2", Capacity: 1),
+            Guid.Parse("00000000-0000-0000-0000-000000000003"));
+        Assert.Equal(ExecuteHandlerResponse.OutcomeOneofCase.Committed, intervening.OutcomeCase);
+
+        CompleteDecisionResponse completed = await client.CompleteDecisionAsync(
+            "school",
+            prepared.ModelSignature,
+            [
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1))
+            ]);
+
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Committed, completed.OutcomeCase);
+        Assert.Equal(expected: 3, completed.Committed.FirstEventId);
+    }
+
+    [Fact]
+    public async Task Remote_decision_expired_at_the_injected_clock_appends_nothing()
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school",
+            "SubscribeStudent",
+            new SubscribeSdk("student-1", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000002"));
+        _factory.Clock.Advance(prepared.ExpiresUtc - _factory.Clock.GetUtcNow());
+
+        CompleteDecisionResponse completed = await client.CompleteDecisionAsync(
+            "school",
+            prepared.ModelSignature,
+            [
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1))
+            ]);
+
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Expired, completed.OutcomeCase);
+        Assert.Equal(prepared.ExpiresUtc, completed.Expired.ExpiresUtc.ToDateTimeOffset());
+        Assert.Equal(expected: 1, (await new DatabaseService.DatabaseServiceClient(_channel)
+            .GetHeadAsync(new GetHeadRequest { Database = "school" })).EventId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Remote_decision_changed_handler_after_prepare_is_invalidated(bool replaceHandler)
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school",
+            "SubscribeStudent",
+            new SubscribeSdk("student-1", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000002"));
+        CatalogService.CatalogServiceClient catalog = new(_channel);
+        if (replaceHandler)
+        {
+            string replacement = SubscribeNdl.Replace(
+                "RemainingSeats = max(remainingSeats, 0)",
+                "RemainingSeats = max(remainingSeats, 1)",
+                StringComparison.Ordinal);
+            RegisterHandlerResponse registered = await RegisterAsync(
+                catalog, "SubscribeStudent", "SubscribeStudentToCourse", replacement);
+            Assert.True(registered.Handler.Valid);
+            Assert.NotEqual(prepared.PlanFingerprint, registered.Handler.PlanFingerprint);
+        }
+        else
+        {
+            await catalog.RemoveHandlerAsync(new RemoveHandlerRequest
+            {
+                Database = "school",
+                HandlerName = "SubscribeStudent"
+            });
+        }
+
+        CompleteDecisionResponse completed = await client.CompleteDecisionAsync(
+            "school",
+            prepared.ModelSignature,
+            [
+                new ProposedDecisionEvent(
+                    "StudentSubscribedToCourse",
+                    new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1))
+            ]);
+
+        Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.Invalidated, completed.OutcomeCase);
+        Assert.Equal("HandlerChanged", completed.Invalidated.Code);
+        Assert.Equal(expected: 1, (await new DatabaseService.DatabaseServiceClient(_channel)
+            .GetHeadAsync(new GetHeadRequest { Database = "school" })).EventId);
+    }
+
+    [Fact]
+    public async Task Concurrent_remote_completion_commits_one_signature_once()
+    {
+        using NativeDcbClient client = await CreateRemoteDecisionClientAsync();
+        PreparedDecision<RemoteSubscribeModel> prepared = await client.PrepareDecisionAsync<
+            SubscribeSdk, RemoteSubscribeModel>(
+            "school",
+            "SubscribeStudent",
+            new SubscribeSdk("student-1", "course-1"),
+            Guid.Parse("00000000-0000-0000-0000-000000000002"));
+        ProposedDecisionEvent[] proposed =
+        [
+            new(
+                "StudentSubscribedToCourse",
+                new RemoteStudentSubscribedSdk("student-1", "course-1", RemainingSeats: 1))
+        ];
+
+        CompleteDecisionResponse[] completed = await Task.WhenAll(
+            client.CompleteDecisionAsync("school", prepared.ModelSignature, proposed),
+            client.CompleteDecisionAsync("school", prepared.ModelSignature, proposed));
+
+        CompleteDecisionResponse committed = Assert.Single(
+            completed, value => value.OutcomeCase == CompleteDecisionResponse.OutcomeOneofCase.Committed);
+        CompleteDecisionResponse replayed = Assert.Single(
+            completed, value => value.OutcomeCase == CompleteDecisionResponse.OutcomeOneofCase.AlreadyCommitted);
+        Assert.Equal(expected: 2, committed.Committed.FirstEventId);
+        Assert.Equal(expected: 2, replayed.AlreadyCommitted.FirstEventId);
+    }
+
+    [Fact]
+    public async Task Local_handler_allows_guarded_missing_model_field_after_replay()
+    {
+        const string replayNdl = """
+                                 decision Replay
+                                 from Replay command
+                                 | include CourseDefined event
+                                     where event.CourseId == command.CourseId
+                                     apply { MissingValue = event.NotPresent }
+                                 | evaluate {
+                                     require not exists(model.MissingValue) else "Unexpected value";
+                                     let safeValue = model.MissingValue ?? "fallback";
+                                 }
+                                 | decide {
+                                     emit Replayed { CourseId = command.CourseId, Value = safeValue };
+                                 };
+                                 """;
+        DatabaseService.DatabaseServiceClient databases = new(_channel);
+        CatalogService.CatalogServiceClient catalog = new(_channel);
+        CommandService.CommandServiceClient commands = new(_channel);
+        await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "school" });
+        Assert.True((await RegisterAsync(catalog, "DefineCourse", "DefineCourse", CreateCourseNdl)).Handler.Valid);
+        Assert.True((await RegisterAsync(catalog, "Replay", "Replay", replayNdl)).Handler.Valid);
+        Assert.Equal(
+            ExecuteHandlerResponse.OutcomeOneofCase.Committed,
+            (await ExecuteAsync(
+                commands, "DefineCourse", Guid.NewGuid(), new { CourseId = "one", Capacity = 1 })).OutcomeCase);
+
+        ExecuteHandlerResponse replayed = await ExecuteAsync(
+            commands, "Replay", Guid.NewGuid(), new { CourseId = "one" });
+
+        Assert.Equal(ExecuteHandlerResponse.OutcomeOneofCase.Committed, replayed.OutcomeCase);
+        using JsonDocument payload = JsonDocument.Parse(
+            Assert.Single(replayed.Committed.Events).DataJson.ToByteArray());
+        Assert.Equal("fallback", payload.RootElement.GetProperty("Value").GetString());
+    }
+
+    private async Task<NativeDcbClient> CreateRemoteDecisionClientAsync()
+    {
+        DatabaseService.DatabaseServiceClient databases = new(_channel);
+        CatalogService.CatalogServiceClient catalog = new(_channel);
+        CommandService.CommandServiceClient commands = new(_channel);
+        NativeDcbClient client = new(commands, new EventService.EventServiceClient(_channel), catalog);
+        await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "school" });
+        await client.RegisterEventSchemaAsync<CourseDefinedSdk>("school");
+        await client.RegisterEventSchemaAsync<RemoteStudentSubscribedSdk>("school");
+        await client.RegisterCommandSchemaAsync<DefineCourseSdk>("school");
+        await client.RegisterCommandSchemaAsync<SubscribeSdk>("school");
+        Assert.True((await RegisterAsync(catalog, "DefineCourse", "DefineCourse", CreateCourseNdl)).Handler.Valid);
+        Assert.True((await RegisterAsync(
+            catalog, "SubscribeStudent", "SubscribeStudentToCourse", SubscribeNdl)).Handler.Valid);
+        ExecuteHandlerResponse course = await client.ExecuteHandlerAsync(
+            "school",
+            "DefineCourse",
+            new DefineCourseSdk("course-1", Capacity: 2),
+            Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        Assert.Equal(ExecuteHandlerResponse.OutcomeOneofCase.Committed, course.OutcomeCase);
+        return client;
+    }
+
     private static async Task<RegisterHandlerResponse> RegisterAsync(
         CatalogService.CatalogServiceClient client,
         string name,
@@ -774,7 +1181,10 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
     {
         return await client.RegisterHandlerAsync(new RegisterHandlerRequest
         {
-            Database = "school", HandlerName = name, CommandType = commandType, NdlSource = source
+            Database = "school",
+            HandlerName = name,
+            CommandType = commandType,
+            NdlSource = source
         });
     }
 
@@ -815,10 +1225,15 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         Assert.Equal("{}", detail.DetailsJson.ToStringUtf8());
     }
 
-    private sealed class ServerFactory(string? databaseRoot = null) : WebApplicationFactory<Program>
+    private sealed class ServerFactory(
+        string? databaseRoot = null,
+        MutableTimeProvider? timeProvider = null) : WebApplicationFactory<Program>
     {
         public string DatabaseRoot { get; } = databaseRoot ?? Path.Combine(
             Path.GetTempPath(), "NativeDCB.Server.Tests", Guid.NewGuid().ToString("N"));
+
+        public MutableTimeProvider Clock { get; } = timeProvider ?? new MutableTimeProvider(
+            new DateTimeOffset(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0, TimeSpan.Zero));
 
         public bool PreserveDatabaseRoot { get; set; }
 
@@ -827,8 +1242,17 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
-                    ["DatabaseRoot"] = DatabaseRoot, ["MaxEventCountPerPartition"] = "3"
+                    ["DatabaseRoot"] = DatabaseRoot,
+                    ["MaxEventCountPerPartition"] = "3",
+                    ["RemoteDecisions:ActiveKeyId"] = "test",
+                    ["RemoteDecisions:SigningKeys:test"] = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+                    ["RemoteDecisions:Lifetime"] = "00:10:00"
                 }));
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<TimeProvider>();
+                services.AddSingleton<TimeProvider>(Clock);
+            });
         }
 
         public override async ValueTask DisposeAsync()
@@ -838,6 +1262,21 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
             {
                 Directory.Delete(DatabaseRoot, recursive: true);
             }
+        }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            return _utcNow;
+        }
+
+        public void Advance(TimeSpan duration)
+        {
+            _utcNow = _utcNow.Add(duration);
         }
     }
 
@@ -854,6 +1293,12 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         // ReSharper disable once NotAccessedPositionalProperty.Local -- Used by SDK serialization and schema reflection.
         [property: ConsistencyKey("course")] string CourseId);
 
+    [EventType("StudentSubscribedToCourse")]
+    private sealed record RemoteStudentSubscribedSdk(
+        [property: ConsistencyKey("student")] string StudentId,
+        [property: ConsistencyKey("course")] string CourseId,
+        int RemainingSeats);
+
     [CommandType("SubscribeStudentToCourse")]
     private sealed record SubscribeSdk(string StudentId, string CourseId);
 
@@ -868,4 +1313,6 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         bool Exists,
         // ReSharper disable once NotAccessedPositionalProperty.Local -- Read by the generated decision plan.
         int Capacity);
+
+    private sealed record RemoteSubscribeModel(bool CourseExists, int CourseCapacity);
 }

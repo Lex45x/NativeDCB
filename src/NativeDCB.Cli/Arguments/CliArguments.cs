@@ -8,11 +8,13 @@ internal sealed class CliArguments
     {
         "allow-incompatible",
         "command-stdin",
+        "events-stdin",
         "help",
         "ndl-stdin",
         "plan-stdin",
         "query-stdin",
         "schema-stdin",
+        "signature-stdin",
         "source-stdin"
     };
 
