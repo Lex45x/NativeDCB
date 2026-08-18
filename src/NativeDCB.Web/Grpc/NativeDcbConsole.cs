@@ -178,7 +178,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_catalog.RemoveHandlerAsync(
             new RemoveHandlerRequest
             {
-                Database = Required(database, nameof(database)), HandlerName = Required(name, nameof(name))
+                Database = Required(database, nameof(database)),
+                HandlerName = Required(name, nameof(name))
             },
             cancellationToken: cancellationToken));
     }
@@ -216,7 +217,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
     {
         ValidateNdlRequest request = new()
         {
-            Database = Required(database, nameof(database)), NdlSource = Required(ndlSource, nameof(ndlSource))
+            Database = Required(database, nameof(database)),
+            NdlSource = Required(ndlSource, nameof(ndlSource))
         };
         request.TransientSchemas.AddRange(ParseTransientSchemas(transientSchemasJson));
         return UnaryAsync(_catalog.ValidateNdlAsync(request, cancellationToken: cancellationToken));
@@ -245,6 +247,44 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_command.ExecuteHandlerAsync(request, cancellationToken: cancellationToken));
     }
 
+    public Task<string> PrepareDecisionAsync(
+        string database,
+        string handlerName,
+        string commandJson,
+        string commandId,
+        CancellationToken cancellationToken = default)
+    {
+        PrepareDecisionRequest request = new()
+        {
+            Database = Required(database, nameof(database)),
+            HandlerName = Required(handlerName, nameof(handlerName)),
+            CommandJson = JsonBytes(commandJson, nameof(commandJson))
+        };
+        if (!string.IsNullOrWhiteSpace(commandId))
+        {
+            request.CommandId = Guid.TryParse(commandId, out Guid parsed)
+                ? parsed.ToString("D")
+                : throw new ArgumentException("Command ID must be a UUID.", nameof(commandId));
+        }
+
+        return UnaryAsync(_command.PrepareDecisionAsync(request, cancellationToken: cancellationToken));
+    }
+
+    public Task<string> CompleteDecisionAsync(
+        string database,
+        string modelSignature,
+        string proposedEventsJson,
+        CancellationToken cancellationToken = default)
+    {
+        CompleteDecisionRequest request = new()
+        {
+            Database = Required(database, nameof(database)),
+            ModelSignature = Base64Bytes(modelSignature, nameof(modelSignature))
+        };
+        request.ProposedEvents.AddRange(ParseProposedEvents(proposedEventsJson));
+        return UnaryAsync(_command.CompleteDecisionAsync(request, cancellationToken: cancellationToken));
+    }
+
     public Task<string> GetEventsByCommandIdAsync(
         string database,
         string commandId,
@@ -253,7 +293,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_command.GetEventsByCommandIdAsync(
             new GetEventsByCommandIdRequest
             {
-                Database = Required(database, nameof(database)), CommandId = Required(commandId, nameof(commandId))
+                Database = Required(database, nameof(database)),
+                CommandId = Required(commandId, nameof(commandId))
             },
             cancellationToken: cancellationToken));
     }
@@ -362,7 +403,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_statement.ExplainStatementAsync(
             new ExplainStatementRequest
             {
-                Database = Required(database, nameof(database)), NdlSource = Required(ndlSource, nameof(ndlSource))
+                Database = Required(database, nameof(database)),
+                NdlSource = Required(ndlSource, nameof(ndlSource))
             },
             cancellationToken: cancellationToken));
     }
@@ -389,7 +431,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_administration.GetStateFileStatusAsync(
             new GetStateFileStatusRequest
             {
-                Database = Required(database, nameof(database)), PartitionNumber = partitionNumber
+                Database = Required(database, nameof(database)),
+                PartitionNumber = partitionNumber
             },
             cancellationToken: cancellationToken));
     }
@@ -402,7 +445,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
     {
         RequestIndexRebuildRequest request = new()
         {
-            Database = Required(database, nameof(database)), EventType = Required(eventType, nameof(eventType))
+            Database = Required(database, nameof(database)),
+            EventType = Required(eventType, nameof(eventType))
         };
         request.Keys.AddRange(ParseKeys(keys));
         return UnaryAsync(_administration.RequestIndexRebuildAsync(request, cancellationToken: cancellationToken));
@@ -416,7 +460,8 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_administration.RequestStateRebuildAsync(
             new RequestStateRebuildRequest
             {
-                Database = Required(database, nameof(database)), PartitionNumber = partitionNumber
+                Database = Required(database, nameof(database)),
+                PartitionNumber = partitionNumber
             },
             cancellationToken: cancellationToken));
     }
@@ -532,6 +577,38 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return schemas;
     }
 
+    private static IEnumerable<ProposedEvent> ParseProposedEvents(string value)
+    {
+        using JsonDocument document = JsonDocument.Parse(Required(value, nameof(value)));
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException("Proposed events must be a JSON array.", nameof(value));
+        }
+
+        List<ProposedEvent> events = [];
+        foreach (JsonElement item in document.RootElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object ||
+                !item.TryGetProperty("type", out JsonElement typeElement) ||
+                typeElement.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(typeElement.GetString()) ||
+                !item.TryGetProperty("data", out JsonElement dataElement))
+            {
+                throw new ArgumentException(
+                    "Each proposed event must use {\"type\":\"EventType\",\"data\":{...}} syntax.",
+                    nameof(value));
+            }
+
+            events.Add(new ProposedEvent
+            {
+                Type = typeElement.GetString(),
+                DataJson = ByteString.CopyFromUtf8(dataElement.GetRawText())
+            });
+        }
+
+        return events;
+    }
+
     private static void SetRange(ReadEventsByRangeRequest request, long? throughEventId, uint? limit)
     {
         ValidateThrough(request.AfterEventId, throughEventId);
@@ -616,6 +693,19 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         using (JsonDocument.Parse(value)) { }
 
         return ByteString.CopyFromUtf8(value);
+    }
+
+    private static ByteString Base64Bytes(string value, string parameterName)
+    {
+        Required(value, parameterName);
+        try
+        {
+            return ByteString.CopyFrom(Convert.FromBase64String(value));
+        }
+        catch (FormatException exception)
+        {
+            throw new ArgumentException("Model signature must be base64.", parameterName, exception);
+        }
     }
 
     private static string Format(IMessage message)

@@ -39,6 +39,12 @@ public interface INativeDcbConsole
     Task<string> ExecuteHandlerAsync(string database, string handlerName, string commandJson, string commandId,
         CancellationToken cancellationToken = default);
 
+    Task<string> PrepareDecisionAsync(string database, string handlerName, string commandJson, string commandId,
+        CancellationToken cancellationToken = default);
+
+    Task<string> CompleteDecisionAsync(string database, string modelSignature, string proposedEventsJson,
+        CancellationToken cancellationToken = default);
+
     Task<string> GetEventsByCommandIdAsync(string database, string commandId,
         CancellationToken cancellationToken = default);
 

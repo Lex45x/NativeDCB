@@ -18,6 +18,45 @@ internal sealed class InputReader(CancellationToken cancellationToken)
         return ByteString.CopyFromUtf8(json);
     }
 
+    public async Task<IReadOnlyList<ProposedEvent>> RequiredProposedEventsAsync(CliArguments arguments)
+    {
+        string json = await RequiredTextAsync(arguments, "events");
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new CliInputException("Completion events JSON must be an array.");
+            }
+
+            List<ProposedEvent> events = [];
+            foreach (JsonElement item in document.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object ||
+                    !item.TryGetProperty("type", out JsonElement typeElement) ||
+                    typeElement.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(typeElement.GetString()) ||
+                    !item.TryGetProperty("data", out JsonElement dataElement))
+                {
+                    throw new CliInputException(
+                        "Each completion event must use {\"type\":\"EventType\",\"data\":{...}} syntax.");
+                }
+
+                events.Add(new ProposedEvent
+                {
+                    Type = typeElement.GetString(),
+                    DataJson = ByteString.CopyFromUtf8(dataElement.GetRawText())
+                });
+            }
+
+            return events;
+        }
+        catch (JsonException exception)
+        {
+            throw new CliInputException($"Invalid completion events JSON: {exception.Message}", exception);
+        }
+    }
+
     public async Task<string> RequiredTextAsync(CliArguments arguments, string name)
     {
         string? inline = arguments.Optional(name);
@@ -251,7 +290,9 @@ internal sealed class InputReader(CancellationToken cancellationToken)
     {
         return new TransientSchema
         {
-            SchemaKind = kind, SchemaName = name, SchemaDocumentJson = ByteString.CopyFromUtf8(json)
+            SchemaKind = kind,
+            SchemaName = name,
+            SchemaDocumentJson = ByteString.CopyFromUtf8(json)
         };
     }
 }

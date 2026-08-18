@@ -13,7 +13,7 @@ public sealed class SchemaAnalyzerTests
     {
         const string source = """
                               using System;
-                              namespace NativeDCB.Sdk
+                              namespace NativeDCB.Sdk.Schemas
                               {
                                   [AttributeUsage(AttributeTargets.Class)]
                                   public sealed class EventTypeAttribute(string name) : Attribute { }
@@ -21,13 +21,13 @@ public sealed class SchemaAnalyzerTests
                                   public sealed class ConsistencyKeyAttribute(string name) : Attribute { }
                               }
 
-                              [NativeDCB.Sdk.EventType("missing")]
+                              [NativeDCB.Sdk.Schemas.EventType("missing")]
                               public sealed record Missing(string Id);
 
-                              [NativeDCB.Sdk.EventType("duplicate")]
+                              [NativeDCB.Sdk.Schemas.EventType("duplicate")]
                               public sealed record Duplicate(
-                                  [property: NativeDCB.Sdk.ConsistencyKey("same")] string First,
-                                  [property: NativeDCB.Sdk.ConsistencyKey("same")] string Second);
+                                  [property: NativeDCB.Sdk.Schemas.ConsistencyKey("same")] string First,
+                                  [property: NativeDCB.Sdk.Schemas.ConsistencyKey("same")] string Second);
                               """;
         CSharpCompilation compilation = CreateCompilation(source);
         ImmutableArray<Diagnostic> diagnostics = await compilation
@@ -43,7 +43,7 @@ public sealed class SchemaAnalyzerTests
     {
         const string source = """
                               using System;
-                              namespace NativeDCB.Sdk
+                              namespace NativeDCB.Sdk.Schemas
                               {
                                   [AttributeUsage(AttributeTargets.Class)]
                                   public sealed class EventTypeAttribute(string name) : Attribute { }
@@ -51,10 +51,10 @@ public sealed class SchemaAnalyzerTests
                                   public sealed class ConsistencyKeyAttribute(string name) : Attribute { }
                               }
 
-                              [NativeDCB.Sdk.EventType("same")]
-                              public sealed record First([property: NativeDCB.Sdk.ConsistencyKey("id")] string Id);
-                              [NativeDCB.Sdk.EventType("same")]
-                              public sealed record Second([property: NativeDCB.Sdk.ConsistencyKey("id")] string Id);
+                              [NativeDCB.Sdk.Schemas.EventType("same")]
+                              public sealed record First([property: NativeDCB.Sdk.Schemas.ConsistencyKey("id")] string Id);
+                              [NativeDCB.Sdk.Schemas.EventType("same")]
+                              public sealed record Second([property: NativeDCB.Sdk.Schemas.ConsistencyKey("id")] string Id);
                               """;
         ImmutableArray<Diagnostic> diagnostics = await CreateCompilation(source)
             .WithAnalyzers([new SchemaAnalyzer()])

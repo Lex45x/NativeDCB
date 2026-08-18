@@ -1,7 +1,7 @@
 # NativeDCB Database Lifecycle
 
 Status: current server lifecycle and health behavior  
-Last verified: 2026-08-14
+Last verified: 2026-08-18
 
 ## Configuration And Identity
 
@@ -11,6 +11,32 @@ Last verified: 2026-08-14
 - `MaxEventCountPerPartition`: defaults to 10,000 and must be positive
 
 Environment variables can set the same keys. The root is converted to an absolute path and created when the server starts.
+
+### Remote decisions
+
+`PrepareDecision` and `CompleteDecision` are optional. They read the `RemoteDecisions` section:
+
+```json
+{
+  "RemoteDecisions": {
+    "ActiveKeyId": "2026-08",
+    "SigningKeys": {
+      "2026-08": "<base64 encoding of at least 32 random bytes>"
+    },
+    "Lifetime": "00:05:00"
+  }
+}
+```
+
+- `ActiveKeyId` must be non-empty and name an entry in `SigningKeys`.
+- `SigningKeys` is a key-ID-to-base64 map. Every key ID must be non-empty and every decoded HMAC-SHA-256 key must contain at least 32 bytes; invalid base64 disables the feature. Keep these keys in secret configuration rather than source or browser assets.
+- `Lifetime` must be positive and defaults to five minutes when omitted.
+
+The server can otherwise start with the section absent or invalid. Only the two remote-decision RPCs then return gRPC `FAILED_PRECONDITION`; `ExecuteHandler` and the rest of the server remain available. Environment variables use ASP.NET Core nesting, for example `RemoteDecisions__ActiveKeyId`, `RemoteDecisions__SigningKeys__2026-08`, and `RemoteDecisions__Lifetime`.
+
+New capabilities are signed with `ActiveKeyId`; verification accepts the key ID embedded in the capability when that ID remains in `SigningKeys`. To rotate keys, add the new key, retain old keys until all capabilities they signed have expired, select the new active ID, and restart the server so options are reconstructed. Omitting an old key from the configuration used by the restarted process makes capabilities signed by it invalid. Unexpired capabilities survive a server restart when the same signing key remains configured, the database retains the same store UUID, and relevant catalog registrations are unchanged because no prepared-decision state is held in memory or on disk.
+
+`model_signature` is an opaque bearer capability. HMAC authenticates its server-generated context but does not encrypt it, authenticate a caller, bind it to a session, or prove that proposed payloads were derived from the returned model. Do not decode, log, publish, or place it in browser/static configuration; any holder can attempt a completion until it expires or is otherwise invalidated.
 
 A database name is a non-empty relative path below the root. Both slash styles are normalized to `/`; rooted names and empty, `.`, or `..` path segments are rejected. Names are registry keys, public gRPC database identifiers, and Orleans string grain keys. There is no rename, delete, unload, restart, or relocation API.
 
@@ -25,7 +51,7 @@ At process startup the registry recursively finds directories containing `databa
 - read availability is a simple check for `store_partition_000001_v1.json`
 - write availability is false until activation succeeds
 
-Activation is lazy. Catalog calls, command execution, administration, statements, `GetHead`, range follow, and event subscriptions use `DatabaseRegistry.GetAsync` and open the database. Finite EventService snapshot/query/type-and-key reads and `GetEventsByCommandId` use the registry entry without opening it; when no store is open, they recover their committed boundary directly from shared partition-file reads.
+Activation is lazy. Catalog calls, handler execution, remote decision preparation/completion, administration, statements, `GetHead`, range follow, and event subscriptions use `DatabaseRegistry.GetAsync` and open the database. Finite EventService snapshot/query/type-and-key reads and `GetEventsByCommandId` use the registry entry without opening it; when no store is open, they recover their committed boundary directly from shared partition-file reads.
 
 ## Directory Layout
 
@@ -125,6 +151,8 @@ A second process holding the same database's `store.lock` causes activation to f
 
 Schemas/handlers can be registered, replaced, and removed. No superseded versions, statement history, audit records, or caller identity are persisted. Handler execution receives a complete immutable actor request, so later catalog mutation does not change that command attempt or its conflict retries.
 
+A prepared remote decision instead fingerprints its handler/plan, command schema, and every event schema referenced by an include or emission. Completion holds the catalog lock while comparing that relevant set and constructing candidates. A changed, removed, or newly added relevant registration invalidates the capability; unrelated schema/handler changes do not. Existing command-ID reconciliation occurs before these checks.
+
 Catalog mutation is coded for Recovering or Ready, but because activation/catalog loading is synchronous, normal calls reach it in Ready. Draining/Faulted/Discovered/Stopped entries reject changes or fail activation.
 
 ## Command Lifecycle
@@ -141,6 +169,29 @@ Catalog mutation is coded for Recovering or Ready, but because activation/catalo
 8. returns commit, already-committed, rejection, or failed outcome
 
 Conflict retries have no count limit and are bounded by request cancellation/deadline or terminal failure. One command ID can commit one batch. Rejections are not persisted.
+
+### Remote command lifecycle
+
+`PrepareDecision`:
+
+1. requires valid `RemoteDecisions` configuration, activates the database, and canonicalizes/generates command ID
+2. reconciles an already committed command before handler/payload checks
+3. validates the current handler and optional command schema
+4. builds the plan's command-derived matching query and captures the Main Writer head
+5. hydrates matching history from an index snapshot plus authoritative committed tail, or a committed scan when unsupported
+6. replays includes in event-ID order into a structural model without running evaluation, requirements, or emissions
+7. returns model JSON plus an expiring HMAC capability containing the observed query/head and relevant identities/fingerprints
+
+`CompleteDecision`:
+
+1. requires valid remote configuration and verifies the capability HMAC, database, and store UUID
+2. reconciles an already committed command before expiry, catalog, or event checks
+3. checks expiry and the signed handler/plan/relevant schema fingerprints
+4. requires proposed events to match the signed plan emission order and count, validates each object payload against its current event schema, and derives keys server-side
+5. attempts one conditional append against the signed query and observed head
+6. returns committed, already-committed, stale, expired, invalidated, or failed
+
+Completion never rehydrates or retries. Only a committed event after the observed head that matches the complete signed query makes the decision stale; unrelated head movement is allowed. To continue after stale/expired/invalidation, a client must prepare and decide again. Reusing the command ID preserves reconciliation. If concurrent capabilities race for one command ID, serialized append checks make the first committed batch authoritative and later attempts return already-committed, even if their proposed payload differs.
 
 ## Read And Subscription Lifecycle
 
@@ -159,7 +210,7 @@ Read grain scans tolerate an incomplete active suffix. Pending writes are invisi
 - Index writes use temporary files and replacement.
 - Explicit rebuild is one-way and status must be polled.
 
-Indexes can lag without changing writer readiness. Transaction decisions use the minimum relevant index head as a snapshot boundary, query the authoritative committed tail through their captured writer head, then deduplicate and order both sets before reduction.
+Indexes can lag without changing writer readiness. Local transaction decisions and remote preparations use the minimum relevant index head as a snapshot boundary, query the authoritative committed tail through their captured writer head, then deduplicate and order both sets before reduction.
 
 ## State-File Lifecycle
 

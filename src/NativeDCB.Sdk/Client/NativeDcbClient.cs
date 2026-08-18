@@ -136,6 +136,30 @@ public sealed class NativeDcbClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
+    public async Task<PreparedDecision<TModel>> PrepareDecisionAsync<TCommand, TModel>(
+        string database,
+        string handlerName,
+        TCommand command,
+        Guid? commandId = null,
+        CancellationToken cancellationToken = default)
+    {
+        PrepareDecisionResponse response = await _commandClient.PrepareDecisionAsync(
+            BuildPrepareDecisionRequest(database, handlerName, command, commandId, _jsonOptions),
+            cancellationToken: cancellationToken);
+        return new PreparedDecision<TModel>(response, _jsonOptions);
+    }
+
+    public async Task<CompleteDecisionResponse> CompleteDecisionAsync(
+        string database,
+        ByteString modelSignature,
+        IReadOnlyCollection<ProposedDecisionEvent> proposedEvents,
+        CancellationToken cancellationToken = default)
+    {
+        return await _commandClient.CompleteDecisionAsync(
+            BuildCompleteDecisionRequest(database, modelSignature, proposedEvents, _jsonOptions),
+            cancellationToken: cancellationToken);
+    }
+
     public async Task<GetEventsByCommandIdResponse> GetEventsByCommandIdAsync(
         string database,
         Guid commandId,
@@ -196,7 +220,10 @@ public sealed class NativeDcbClient : IDisposable
         ArgumentNullException.ThrowIfNull(keys);
         ReadEventsByTypeAndKeysRequest request = new()
         {
-            Database = database, EventType = eventType, AfterEventId = afterEventId, Consistency = consistency
+            Database = database,
+            EventType = eventType,
+            AfterEventId = afterEventId,
+            Consistency = consistency
         };
         request.Keys.AddRange(keys.Select(key => new KeyValue { Key = key.Name, Value = key.Value }));
         if (throughEventId.HasValue)
@@ -415,7 +442,9 @@ public sealed class NativeDcbClient : IDisposable
             .ExecuteStatement(
                 new ExecuteStatementRequest
                 {
-                    Database = database, NdlSource = ndlSource, AllowIncompatible = allowIncompatible
+                    Database = database,
+                    NdlSource = ndlSource,
+                    AllowIncompatible = allowIncompatible
                 },
                 cancellationToken: cancellationToken);
         while (await call.ResponseStream.MoveNext(cancellationToken))
@@ -525,6 +554,63 @@ public sealed class NativeDcbClient : IDisposable
         return request;
     }
 
+    public static PrepareDecisionRequest BuildPrepareDecisionRequest<TCommand>(
+        string database,
+        string handlerName,
+        TCommand command,
+        Guid? commandId = null,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ValidateRequired(database, nameof(database));
+        ValidateRequired(handlerName, nameof(handlerName));
+        ArgumentNullException.ThrowIfNull(command);
+        PrepareDecisionRequest request = new()
+        {
+            Database = database,
+            HandlerName = handlerName,
+            CommandJson = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes(command, jsonOptions))
+        };
+        if (commandId.HasValue)
+        {
+            request.CommandId = commandId.Value.ToString("D");
+        }
+
+        return request;
+    }
+
+    public static CompleteDecisionRequest BuildCompleteDecisionRequest(
+        string database,
+        ByteString modelSignature,
+        IReadOnlyCollection<ProposedDecisionEvent> proposedEvents,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ValidateRequired(database, nameof(database));
+        ArgumentNullException.ThrowIfNull(modelSignature);
+        if (modelSignature.IsEmpty)
+        {
+            throw new ArgumentException("A value is required.", nameof(modelSignature));
+        }
+
+        ArgumentNullException.ThrowIfNull(proposedEvents);
+        CompleteDecisionRequest request = new() { Database = database, ModelSignature = modelSignature };
+        foreach (ProposedDecisionEvent proposedEvent in proposedEvents)
+        {
+            ArgumentNullException.ThrowIfNull(proposedEvent);
+            ValidateRequired(proposedEvent.Type, nameof(proposedEvents));
+            ArgumentNullException.ThrowIfNull(proposedEvent.Data);
+            request.ProposedEvents.Add(new ProposedEvent
+            {
+                Type = proposedEvent.Type,
+                DataJson = ByteString.CopyFrom(JsonSerializer.SerializeToUtf8Bytes(
+                    proposedEvent.Data,
+                    proposedEvent.Data.GetType(),
+                    jsonOptions))
+            });
+        }
+
+        return request;
+    }
+
     public static GetEventsByCommandIdRequest BuildGetEventsByCommandIdRequest(string database, Guid commandId)
     {
         ValidateRequired(database, nameof(database));
@@ -565,7 +651,10 @@ public sealed class NativeDcbClient : IDisposable
         ValidateRange(database, afterEventId, throughEventId);
         ReadEventsByQueryRequest request = new()
         {
-            Database = database, Query = MapQuery(query), AfterEventId = afterEventId, Consistency = consistency
+            Database = database,
+            Query = MapQuery(query),
+            AfterEventId = afterEventId,
+            Consistency = consistency
         };
         if (throughEventId.HasValue)
         {

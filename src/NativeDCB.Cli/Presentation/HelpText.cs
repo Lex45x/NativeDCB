@@ -30,6 +30,8 @@ internal static class HelpText
                                  catalog list-handlers                 CatalogService.ListHandlers
                                  catalog validate-ndl                  CatalogService.ValidateNdl
                                  command execute-handler               CommandService.ExecuteHandler
+                                 command prepare-decision              CommandService.PrepareDecision
+                                 command complete-decision             CommandService.CompleteDecision
                                  command events-by-command-id          CommandService.GetEventsByCommandId
                                  event read-range                      EventService.ReadEventsByRange
                                  event read-query                      EventService.ReadEventsByQuery
@@ -45,6 +47,7 @@ internal static class HelpText
 
                                Input conventions:
                                  JSON: --schema JSON | --schema-file PATH | --schema-stdin (similarly command, plan, query)
+                                 Completion events: --events '[{"type":"EventType","data":{...}}]' (or file/stdin variants)
                                  NDL:  --ndl TEXT | --ndl-file PATH | --ndl-stdin (handler source uses --source variants)
                                  Keys: repeat --key name=value. Values may be empty and may contain '='.
                                  Query: complete protobuf JSON via --query variants; repeat --query-item JSON; or build one
@@ -96,6 +99,17 @@ internal static class HelpText
                                       Usage: nativedcb command execute-handler --database NAME --handler NAME [--command-id ID]
                                                  (--command JSON|--command-file PATH|--command-stdin)
                                       """,
+        ["command prepare-decision"] = """
+                                       Usage: nativedcb command prepare-decision --database NAME --handler NAME [--command-id ID]
+                                                  (--command JSON|--command-file PATH|--command-stdin)
+                                       """,
+        ["command complete-decision"] = """
+                                        Usage: nativedcb command complete-decision --database NAME
+                                                   (--signature BASE64|--signature-file PATH|--signature-stdin)
+                                                   (--events JSON|--events-file PATH|--events-stdin)
+                                        Events JSON: [{"type":"EventType","data":{...}}]
+                                        Prefer file or stdin input so the bearer signature is not exposed in shell history or logs.
+                                        """,
         ["command events-by-command-id"] =
             "Usage: nativedcb command events-by-command-id --database NAME --command-id ID",
         ["event read-range"] = """

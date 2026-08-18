@@ -205,7 +205,8 @@ internal static class CliApplication
                 return await UnaryAsync(catalog.RemoveHandlerAsync(
                     new RemoveHandlerRequest
                     {
-                        Database = arguments.Required("database"), HandlerName = arguments.Required("name")
+                        Database = arguments.Required("database"),
+                        HandlerName = arguments.Required("name")
                     }, cancellationToken: cancellationToken));
             case "catalog get-handler":
                 arguments.EnsureAllowed("database", "name", "include-plan", "generate-ndl");
@@ -254,12 +255,48 @@ internal static class CliApplication
                     commands.ExecuteHandlerAsync(executeRequest, cancellationToken: cancellationToken),
                     response => response.OutcomeCase is ExecuteHandlerResponse.OutcomeOneofCase.Committed or
                         ExecuteHandlerResponse.OutcomeOneofCase.AlreadyCommitted);
+            case "command prepare-decision":
+                arguments.EnsureAllowed(
+                    "database", "handler", "command-id", "command", "command-file", "command-stdin");
+                PrepareDecisionRequest prepareRequest = new()
+                {
+                    Database = arguments.Required("database"),
+                    HandlerName = arguments.Required("handler"),
+                    CommandJson = await input.RequiredJsonAsync(arguments, "command")
+                };
+                string? prepareCommandId = arguments.Optional("command-id");
+                if (prepareCommandId is not null)
+                {
+                    prepareRequest.CommandId = prepareCommandId;
+                }
+
+                return await UnaryAsync(
+                    commands.PrepareDecisionAsync(prepareRequest, cancellationToken: cancellationToken),
+                    response => response.OutcomeCase is PrepareDecisionResponse.OutcomeOneofCase.Prepared or
+                        PrepareDecisionResponse.OutcomeOneofCase.AlreadyCommitted);
+            case "command complete-decision":
+                arguments.EnsureAllowed(
+                    "database", "signature", "signature-file", "signature-stdin",
+                    "events", "events-file", "events-stdin");
+                CompleteDecisionRequest completeRequest = new()
+                {
+                    Database = arguments.Required("database"),
+                    ModelSignature = ParseBase64(
+                        (await input.RequiredTextAsync(arguments, "signature")).Trim(),
+                        "signature")
+                };
+                completeRequest.ProposedEvents.AddRange(await input.RequiredProposedEventsAsync(arguments));
+                return await UnaryAsync(
+                    commands.CompleteDecisionAsync(completeRequest, cancellationToken: cancellationToken),
+                    response => response.OutcomeCase is CompleteDecisionResponse.OutcomeOneofCase.Committed or
+                        CompleteDecisionResponse.OutcomeOneofCase.AlreadyCommitted);
             case "command events-by-command-id":
                 arguments.EnsureAllowed("database", "command-id");
                 return await UnaryAsync(commands.GetEventsByCommandIdAsync(
                     new GetEventsByCommandIdRequest
                     {
-                        Database = arguments.Required("database"), CommandId = arguments.Required("command-id")
+                        Database = arguments.Required("database"),
+                        CommandId = arguments.Required("command-id")
                     }, cancellationToken: cancellationToken));
             case "event read-range":
                 arguments.EnsureAllowed("database", "after", "through", "limit", "mode");
@@ -365,7 +402,8 @@ internal static class CliApplication
                 arguments.EnsureAllowed("database", "event-type", "key");
                 RequestIndexRebuildRequest indexRequest = new()
                 {
-                    Database = arguments.Required("database"), EventType = arguments.Required("event-type")
+                    Database = arguments.Required("database"),
+                    EventType = arguments.Required("event-type")
                 };
                 indexRequest.Keys.AddRange(InputReader.ParseKeys(arguments.Many("key")));
                 return await UnaryAsync(
@@ -532,6 +570,18 @@ internal static class CliApplication
     private static SchemaKind ParseOptionalSchemaKind(string? value)
     {
         return value is null ? SchemaKind.Unspecified : ParseSchemaKind(value);
+    }
+
+    private static ByteString ParseBase64(string value, string option)
+    {
+        try
+        {
+            return ByteString.CopyFrom(Convert.FromBase64String(value));
+        }
+        catch (FormatException exception)
+        {
+            throw new CliInputException($"Invalid base64 for --{option}: {exception.Message}", exception);
+        }
     }
 
     private static void ValidateServer(string server)

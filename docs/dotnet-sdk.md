@@ -1,7 +1,7 @@
 # NativeDCB .NET SDK
 
 Status: current runtime, fluent API, analyzer, and generator reference  
-Last verified: 2026-08-14
+Last verified: 2026-08-18
 
 ## Packages And Projects
 
@@ -154,7 +154,7 @@ The client provides:
 
 - Database: `ListDatabasesAsync`, `CreateDatabaseAsync`, `GetDatabaseInfoAsync`, `GetHealthAsync`, `GetCapabilitiesAsync`, and `GetHeadAsync`
 - Catalog: schema and handler registration, `GetSchemaAsync`, `ListSchemasAsync`, `RemoveSchemaAsync`, `RemoveHandlerAsync`, `GetHandlerAsync`, `ListHandlersAsync`, decision registration, and `ValidateNdlAsync`
-- Command: `ExecuteHandlerAsync<TCommand>` and `GetEventsByCommandIdAsync`
+- Command: `ExecuteHandlerAsync<TCommand>`, typed `PrepareDecisionAsync<TCommand,TModel>`, `CompleteDecisionAsync`, and `GetEventsByCommandIdAsync`
 - Event: `ReadEventsByRangeAsync`, `ReadEventsByQueryAsync`, `ReadEventsByTypeAndKeysAsync`, and `SubscribeEventsAsync` as `IAsyncEnumerable<SequencedEvent>`
 - Statement: `ExecuteStatementAsync` as `IAsyncEnumerable<StatementResult>` and `ExplainStatementAsync`
 - Administration: `ListPartitionsAsync`, `ListIndexesAsync`, `GetStateFileStatusAsync`, `RequestIndexRebuildAsync`, and `RequestStateRebuildAsync`
@@ -182,6 +182,45 @@ await foreach (SequencedEvent item in client.ReadEventsByQueryAsync(
 ```
 
 Unary operations and statement streams expose generated protocol response/result types rather than a custom typed result union; event streams map envelopes to model `SequencedEvent` values. The client passes cancellation but does not configure default deadlines or retries.
+
+### Typed remote decisions
+
+When the server has `RemoteDecisions` configured, the SDK can hydrate a handler model on the server and let application code propose payloads for the plan's ordered emission types:
+
+```csharp
+Guid commandId = Guid.NewGuid();
+PreparedDecision<CourseModel> prepared = await client.PrepareDecisionAsync<
+    SubscribeStudentToCourse, CourseModel>(
+    "school",
+    "SubscribeStudentSdk",
+    new SubscribeStudentToCourse("student-1", "course-1"),
+    commandId,
+    cancellationToken);
+
+if (prepared.IsPrepared)
+{
+    CourseModel model = prepared.Model;
+    CompleteDecisionResponse completion = await client.CompleteDecisionAsync(
+        "school",
+        prepared.ModelSignature,
+        [
+            new ProposedDecisionEvent(
+                "StudentSubscribedToCourse",
+                new StudentSubscribedToCourse("student-1", "course-1"))
+        ],
+        cancellationToken);
+}
+```
+
+`PreparedDecision<TModel>` preserves the generated `PrepareDecisionResponse` and exposes `OutcomeCase`, `IsPrepared`, `CommandId`, and `CommandType`. For a `prepared` outcome it deserializes `model_json` with the client's `JsonSerializerOptions` and exposes `Model`, `ModelSignature`, `ExpiresUtc`, and `PlanFingerprint`; accessing prepared-only properties for another outcome throws. Malformed JSON or a deserialized null model throws `JsonException`; normal `System.Text.Json` mapping rules otherwise apply, so `TModel` and the configured options must be compatible with the structural object produced by the registered plan's includes.
+
+The hydrated model is the result of replaying the signed matching query through the captured server head. Supported indexes supply a snapshot and an authoritative committed scan supplies any missing tail; events are deduplicated and replayed in event-ID order, and include reducers patch the structural model in plan order. Preparation does not run evaluation locals, requirements, the decision expression, or emissions. It therefore returns model state for application decision code, not the server's accept/reject result.
+
+`ProposedDecisionEvent` carries only `Type` and runtime `Data`. `CompleteDecisionAsync` serializes `Data` using its runtime CLR type. The server requires proposed events to match the prepared plan's emission order and count, validates object payloads against current registered schemas, and derives consistency keys server-side. The model is not sent back at completion and the signature must be treated as an opaque bearer capability, not decoded or logged.
+
+Prepare outcomes are `prepared`, `already_committed`, or `failed`. Complete outcomes are `committed`, `already_committed`, `stale`, `expired`, `invalidated`, or `failed`; inspect the generated outcome union. Neither the SDK nor completion automatically retries. On `stale`, `expired`, or `invalidated`, application code may prepare again with the same command ID and recompute from the newly hydrated model. First commit wins for a command ID, so replay or a competing completion can return `already_committed` regardless of the newly proposed data.
+
+These APIs use an existing registered executable `DecisionPlan`, including its declared emissions. Model-only plan support tracked separately in issue #15 is not implemented by remote decisions.
 
 ## SDK Runtime Diagnostics
 
@@ -227,4 +266,4 @@ It returns ordered `SchemaDescriptor.ForEvent<T>()` / `ForCommand<T>()` calls. I
 
 `samples/CourseSubscriptions` is analyzer-wired through direct project analyzer references and invokes `NativeDCB.Generated.NativeDcbGeneratedSchemas.Create()`. Its idempotent `seed` mode creates the database and registers all event/command schemas plus both NDL handlers and the fluent SDK handler without emitting events. Its `run` mode invokes the same seeder before defining a course and executing subscriptions through both authoring paths.
 
-SDK tests cover descriptors/tags, fluent type-state/order, query translation, plan shape, request mapping, analyzer diagnostics, and generator output. Server integration includes a full SDK flow across Database, Catalog, Statement, Command, Event, and Administration services. The end-to-end project retains an in-process authoring-equivalence test and also launches a real server process with isolated ports and temporary storage to run the exact sample NDL alongside an SDK-authored plan, execute commands, subscribe, and verify streamed and persisted events.
+SDK tests cover descriptors/tags, fluent type-state/order, query translation, plan shape, remote prepare/complete mapping and typed hydration, analyzer diagnostics, and generator output. Server integration includes a full SDK flow across Database, Catalog, Statement, Command, Event, and Administration services plus remote completion, derived keys, replay, signature tampering, and matching-query staleness. The end-to-end project retains an in-process authoring-equivalence test and also launches a real server process with isolated ports and temporary storage to run the exact sample NDL alongside an SDK-authored plan, execute commands, subscribe, and verify streamed and persisted events.

@@ -1,7 +1,7 @@
 # NativeDCB CLI
 
-Status: implemented 29-RPC native gRPC client reference
-Last verified: 2026-08-14
+Status: implemented 31-RPC native gRPC client reference
+Last verified: 2026-08-18
 
 ## Build And Run
 
@@ -20,7 +20,7 @@ dotnet run --project src\NativeDCB.Cli -- database list
 
 The built executable is named `nativedcb` (`nativedcb.exe` on Windows). Examples below use `dotnet run` so they do not depend on an installation or `PATH` entry.
 
-The CLI is a native gRPC client and covers all 29 RPCs in `nativedcb.v1`. Start `NativeDCB.Server` first. Its native HTTP/2 launch endpoint is `http://localhost:5010`; gRPC-Web is for browser clients and is not needed by the CLI.
+The CLI is a native gRPC client and covers all 31 RPCs in `nativedcb.v1`. Start `NativeDCB.Server` first. Its native HTTP/2 launch endpoint is `http://localhost:5010`; gRPC-Web is for browser clients and is not needed by the CLI.
 
 ## Server Selection
 
@@ -73,14 +73,18 @@ Use `nativedcb <group> <command> --help` for command-specific usage.
 
 Schema inputs are `--schema JSON`, `--schema-file PATH`, or `--schema-stdin`. Handler NDL uses `--source`, `--source-file`, or `--source-stdin`; plan JSON uses the corresponding `--plan` variants. At least one handler source or plan is required, and both may be supplied. Transient validation schemas are repeatable `--transient event:name=JSON`, `--transient-file command:name=PATH`, or `--transient-stdin event:name` options; either `event` or `command` is valid in each form.
 
-### CommandService (2)
+### CommandService (4)
 
 | Command | Inputs |
 |---|---|
 | `command execute-handler` | `--database NAME --handler HANDLER`, exactly one command JSON input, optional `--command-id UUID` |
+| `command prepare-decision` | `--database NAME --handler HANDLER`, exactly one command JSON input, optional `--command-id UUID` |
+| `command complete-decision` | `--database NAME`, exactly one signature input and exactly one proposed-events JSON input |
 | `command events-by-command-id` | `--database NAME --command-id UUID` |
 
-Command JSON uses `--command JSON`, `--command-file PATH`, or `--command-stdin`.
+Command JSON uses `--command JSON`, `--command-file PATH`, or `--command-stdin`. Completion uses `--events JSON`, `--events-file PATH`, or `--events-stdin`; its JSON shape is `[{"type":"EventType","data":{...}}]`. The signature input is `--signature BASE64`, `--signature-file PATH`, or `--signature-stdin`. These options are mutually exclusive and accept the base64 protobuf-JSON value returned as `prepared.modelSignature` by preparation; surrounding whitespace is ignored.
+
+Remote decisions are optional server functionality. Both remote commands receive `FAILED_PRECONDITION` unless `RemoteDecisions` is configured. Treat the signature as an opaque bearer capability: do not decode, log, or expose it. The CLI considers `prepared`, `committed`, and either method's `already_committed` outcome successful as applicable; stale, expired, invalidated, and failed outcomes exit `65`. It does not automatically prepare again or retry completion.
 
 ### EventService (4)
 
@@ -181,6 +185,31 @@ Unary success writes one compact protobuf JSON object followed by a newline to s
 | `130` | Cancelled, including `Ctrl+C`. |
 
 For streaming commands, response lines can be emitted before a later unsuccessful completion or transport error determines the final nonzero exit code.
+
+## Remote Decision Flow
+
+Prepare a typed handler's model using the command input syntax shared with `execute-handler`:
+
+```powershell
+dotnet run --project src\NativeDCB.Cli -- command prepare-decision `
+  --database school --handler SubscribeStudent `
+  --command '{"StudentId":"student-remote","CourseId":"native-dcb"}' `
+  --command-id 00000000-0000-0000-0000-000000000001 > .\prepared.json
+```
+
+Redirect the preparation response, read its base64 `prepared.modelSignature`, and submit event payloads matching the plan's emission order and count. The server validates the current schema and derives consistency keys; event JSON does not include keys.
+
+```powershell
+(Get-Content -Raw .\prepared.json | ConvertFrom-Json).prepared.modelSignature |
+  Set-Content .\model-signature.txt
+
+dotnet run --project src\NativeDCB.Cli -- command complete-decision `
+  --database school --signature-file .\model-signature.txt --events-file .\events.json
+```
+
+Prefer `--signature-file` or `--signature-stdin` over inline `--signature` so the bearer capability does not appear in shell history, process listings, or command logs. For a pipeline, send only the extracted `prepared.modelSignature` to `--signature-stdin`; standard input cannot also supply events in the same invocation. Protect and delete redirected preparation and signature files when they are no longer needed.
+
+Completion is a single conditional append. A `stale` response means a matching event was committed after preparation; prepare again with the same command ID and recompute the proposal if the command should continue. Unrelated head movement does not make the signed matching query stale.
 
 ## Practical Flow
 

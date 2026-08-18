@@ -81,7 +81,7 @@ public sealed class SchemaAnalyzer : DiagnosticAnalyzer
         SymbolAnalysisContext context,
         ConcurrentDictionary<string, ConcurrentBag<Location>> eventNames)
     {
-        AttributeData? eventAttribute = Attribute(type, "NativeDCB.Sdk.EventTypeAttribute");
+        AttributeData? eventAttribute = Attribute(type, "NativeDCB.Sdk.Schemas.EventTypeAttribute");
         if (eventAttribute is null)
         {
             return;
@@ -92,7 +92,7 @@ public sealed class SchemaAnalyzer : DiagnosticAnalyzer
         (IPropertySymbol Property, string Name)[] keys = type.GetMembers()
             .OfType<IPropertySymbol>()
             .Select(property => (Property: property,
-                Attribute: Attribute(property, "NativeDCB.Sdk.ConsistencyKeyAttribute")))
+                Attribute: Attribute(property, "NativeDCB.Sdk.Schemas.ConsistencyKeyAttribute")))
             .Where(value => value.Attribute is not null)
             .Select(value => (value.Property,
                 value.Attribute!.ConstructorArguments[index: 0].Value as string ?? string.Empty))

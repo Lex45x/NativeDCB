@@ -1,6 +1,6 @@
 @page "/"
 @using System.Text.Json
-@using Grpc.Core
+@using global::Grpc.Core
 @using NativeDCB.Web.Grpc
 @using NativeDCB.Web.Grpc.Discovery
 @implements IDisposable
@@ -218,7 +218,7 @@ else if (activeService.Name == "Catalog")
 else if (activeService.Name == "Command")
 {
     <div class="rpc-grid two-up">
-        <RpcCard Title="ExecuteHandler" Note="Execute a registered handler with arbitrary command JSON.">
+        <RpcCard Title="ExecuteHandler / PrepareDecision" Note="Execute immediately or prepare a signed external decision model.">
             <div class="field-pair">
                 <label>
                     <span>Handler name</span><input @bind="handlerName" @bind:event="oninput" placeholder="place-order">
@@ -230,7 +230,20 @@ else if (activeService.Name == "Command")
             <label>
                 <span>Command JSON</span><textarea class="json-input" @bind="commandJson" @bind:event="oninput" spellcheck="false"></textarea>
             </label>
-            <button class="button button-run" @onclick="ExecuteHandlerAsync" disabled="@busy">Execute command</button>
+            <div class="button-row">
+                <button class="button button-run" @onclick="ExecuteHandlerAsync" disabled="@busy">Execute command</button>
+                <button class="button" @onclick="PrepareDecisionAsync" disabled="@busy">Prepare decision</button>
+            </div>
+        </RpcCard>
+        <RpcCard Title="CompleteDecision" Note="Commit proposed events against an opaque model signature returned by PrepareDecision.">
+            <label>
+                <span>Model signature <small>base64</small></span><textarea @bind="modelSignature" @bind:event="oninput" spellcheck="false"></textarea>
+            </label>
+            <label>
+                <span>Proposed events JSON <small>[{ type, data }]</small></span>
+                <textarea class="json-input" @bind="proposedEventsJson" @bind:event="oninput" spellcheck="false"></textarea>
+            </label>
+            <button class="button button-run" @onclick="CompleteDecisionAsync" disabled="@busy">Complete decision</button>
         </RpcCard>
         <RpcCard Title="GetEventsByCommandId" Note="Reconcile every event committed by a command UUID.">
             <label>
@@ -430,6 +443,8 @@ else
 
     private string commandJson = "{\n  \"value\": null\n}";
     private string commandId = string.Empty;
+    private string modelSignature = string.Empty;
+    private string proposedEventsJson = "[\n  {\n    \"type\": \"EventType\",\n    \"data\": {}\n  }\n]";
 
     private long afterEventId;
     private long? throughEventId;
@@ -553,6 +568,18 @@ else
     {
         return RunUnaryAsync("Command.GetEventsByCommandId", token =>
             Console.GetEventsByCommandIdAsync(database, commandId, token));
+    }
+
+    private Task PrepareDecisionAsync()
+    {
+        return RunUnaryAsync("Command.PrepareDecision", token =>
+            Console.PrepareDecisionAsync(database, handlerName, commandJson, commandId, token));
+    }
+
+    private Task CompleteDecisionAsync()
+    {
+        return RunUnaryAsync("Command.CompleteDecision", token =>
+            Console.CompleteDecisionAsync(database, modelSignature, proposedEventsJson, token));
     }
 
     private Task ReadEventsByRangeAsync()

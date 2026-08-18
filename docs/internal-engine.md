@@ -1,7 +1,7 @@
 # NativeDCB Internal Engine
 
 Status: current implementation reference  
-Last verified: 2026-08-14
+Last verified: 2026-08-18
 
 ## Correctness Model
 
@@ -18,6 +18,8 @@ A decision uses **read snapshot, single writer** semantics:
 
 The observed head bounds the read even if that head event does not match the query. Pending or incomplete records are not visible. This preserves DCB correctness without making derived indexes authoritative.
 
+Remote decisions split this lifecycle at the same boundary. `PrepareDecision` builds the command-derived query, captures the writer head, hydrates and serializes the structural model, then returns a signed, expiring context containing the query and observed head. `CompleteDecision` validates that context and attempts exactly one conditional append of client-proposed events. A later matching event returns `stale`; unrelated events after the observed head do not. Unlike the Transaction grain, completion does not rebuild the model or retry.
+
 ## Orleans Roles
 
 ### Main Writer grain
@@ -32,9 +34,11 @@ The grain does not run reducers. Orleans default grain serialization and the sto
 
 The grain has no Orleans-persisted state. Its captured request makes handler replacement/removal irrelevant to that invocation.
 
+Remote preparation/completion does not use the Transaction grain and creates no grain or server-side continuation state. The HMAC-protected capability carries command identity/hash, plan/catalog, query, head, expiry, and store identity needed for completion. Handler or relevant schema changes invalidate an uncommitted capability; an already committed command is reconciled first.
+
 ### Read grain
 
-`IReadGrain`, keyed by database, serves partition status, range, query, and command-ID reads. It uses `PartitionEventReader`, which opens metadata/partition files for shared reading and reconstructs committed events. Finite public reads use this partition path without opening an unopened store; an open store supplies the Main Writer's promoted head as their boundary. Transaction hydration first asks the Index Coordinator for a snapshot and its minimum index head, then uses this grain to complete the committed tail through the captured writer head. Results are deduplicated and ordered by event ID, so indexes remain non-authoritative.
+`IReadGrain`, keyed by database, serves partition status, range, query, and command-ID reads. It uses `PartitionEventReader`, which opens metadata/partition files for shared reading and reconstructs committed events. Finite public reads use this partition path without opening an unopened store; an open store supplies the Main Writer's promoted head as their boundary. Local transaction and remote model hydration first ask the Index Coordinator for a snapshot and its minimum index head, then use this grain to complete the committed tail through the captured writer head. Results are deduplicated and ordered by event ID, so indexes remain non-authoritative.
 
 ### State Builder grain
 
@@ -153,5 +157,6 @@ Indexes are asynchronous, derived, and potentially stale. `EVENTUAL_INDEX` may r
 - State-file generation replays the complete prefix for each target, and existing-file reuse validation is less comprehensive than startup checkpoint validation.
 - Notifications are in-process events and direct grain calls, not durable pub/sub.
 - Index notification failures are swallowed/recorded and do not alter commit success.
+- Prepared remote decisions are stateless bearer capabilities. There is no server-side continuation store, revocation list, caller binding, or automatic completion retry.
 - There are no record/batch/file size limits, compaction, retention, checksums, backups, or repair commands for authoritative partitions.
 - The design is not safe for multiple silos sharing one filesystem except insofar as the OS lock rejects a second writer process.

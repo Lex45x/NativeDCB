@@ -1,7 +1,7 @@
 # NativeDCB gRPC API
 
 Status: implemented `nativedcb.v1` protocol reference  
-Last verified: 2026-08-14
+Last verified: 2026-08-18
 
 ## Contract
 
@@ -18,7 +18,7 @@ Every RPC in all six services is available over both transports:
 
 The server reads browser origins from `GrpcWeb:AllowedOrigins` and exposes the gRPC status/error headers required by the client. Its defaults allow `http://localhost:5094` and `https://localhost:7229`, matching the Web launch profiles. A different static host origin must be added explicitly. CORS is enforced by browsers and is not an authentication or authorization boundary; the current server implements neither and must not be exposed to untrusted networks.
 
-The repository has two operator clients with the complete 29-RPC surface:
+The repository has two operator clients with the complete 31-RPC surface:
 
 - `NativeDCB.Cli` maps one command to every RPC and uses native gRPC. See [CLI](cli.md).
 - `NativeDCB.Web` is a standalone Blazor WebAssembly application with explicit controls for every RPC, direct gRPC-Web calls, incremental stream output and cancellation, and a prominent NDL editor. It has no BFF.
@@ -59,6 +59,8 @@ Schema details are in [Requirements](requirements.md). Diagnostics currently inc
 
 ## CommandService
 
+CommandService has four methods. `ExecuteHandler` performs the complete decision on the server and retries matching-boundary conflicts internally. `PrepareDecision` and `CompleteDecision` split model hydration from event proposal; this optional feature requires the server's `RemoteDecisions` HMAC configuration. See [Database Lifecycle](database-lifecycle.md#remote-decisions).
+
 ### `ExecuteHandler`
 
 The request contains database, handler, optional canonical non-empty command UUID, and command JSON bytes. The server creates a UUID when omitted. It checks for an existing committed command before handler lookup and payload validation, allowing ambiguous-result reconciliation even if the handler was removed.
@@ -71,6 +73,39 @@ The response always echoes command ID/type and has one outcome:
 - `failed`: an `ErrorDetail`, most commonly `InvalidCommand`
 
 Boundary conflicts are retried inside the Transaction grain. Cancellation/deadline interrupts execution. Writer/storage failures use transport statuses rather than a `failed` outcome.
+
+### `PrepareDecision`
+
+The request contains database, handler, optional canonical non-empty command UUID, and command JSON bytes. The server generates a UUID when omitted and, as with `ExecuteHandler`, reconciles an existing committed command before handler lookup or payload validation.
+
+For a new command, the server validates the command, builds the handler's command-derived matching query, captures the Main Writer head, and hydrates the plan's structural model through that head. Hydration combines supported index results with an authoritative committed tail, deduplicates by event ID, replays matching events in ascending event-ID order, and applies matching includes in plan order. It stops before the plan's evaluation, requirements, and emissions. Every model value must be initialized before the structural model is serialized as `model_json`.
+
+The response echoes command ID/type and has one outcome:
+
+- `prepared`: hydrated `model_json`, opaque `model_signature`, expiry, and plan fingerprint
+- `already_committed`: original first/last event ID
+- `failed`: an `ErrorDetail`, currently used for invalid command/runtime input
+
+The signature authenticates a self-contained preparation context including database/store identity, command and handler identity, plan and relevant catalog fingerprints, observed head, matching query, the ordered emission-type sequence, expiry, and a nonce. It is an opaque bearer capability, not caller authentication and not encryption. Clients must not parse, log, or expose it; anyone possessing it can attempt completion within its constraints. The server does not persist prepared-decision continuation state.
+
+### `CompleteDecision`
+
+The request contains the database, the exact `model_signature` bytes returned by preparation, and proposed events containing only event type and object JSON. It does not resend the model, command, observed head, query, keys, or command ID. Event types must match the signed plan emission order and count. A current registered event schema validates each payload and the server derives consistency keys from it; clients cannot supply keys.
+
+After signature and database/store checks, the server reconciles the signed command ID before checking expiry, catalog state, write availability, or proposed events. It then verifies that the handler name, command type, plan fingerprint, relevant command schema, and every included or emitted event schema still match preparation. Unrelated catalog changes do not invalidate the capability. A missing schema needed by a proposed event is invalidated as `EventSchemaMissing`.
+
+The response echoes the signed command ID/type and has one outcome:
+
+- `committed`: first/last event ID plus all committed envelopes
+- `already_committed`: the batch committed first for this command ID, without inline events
+- `stale`: no event was appended because an event after the observed head matched the signed query; `current_head` is returned
+- `expired`: no event was appended because the signed expiry was reached
+- `invalidated`: no event was appended; current codes are `HandlerChanged`, `SchemaChanged`, and `EventSchemaMissing`
+- `failed`: no event was appended; `InvalidEvents` covers an emission order/count mismatch, non-object/invalid JSON, or schema/key validation failure
+
+Head movement alone is not stale: an intervening event outside the signed matching query does not block completion. Completion performs one conditional append and never rehydrates or retries a stale decision. Callers that still want the command must prepare again, normally with the same command ID, and decide again from the new model. The SDK and CLI also configure no automatic remote-decision retries.
+
+The command ID is the replay/idempotency boundary. Concurrent or repeated valid completions race at the Main Writer; the first committed batch wins, and later attempts return `already_committed` even when they carry different proposed payloads or the capability has since expired or become catalog-invalid. Invalid/tampered/unknown-key signatures and database/store mismatches use `INVALID_ARGUMENT` rather than an outcome.
 
 ### `GetEventsByCommandId`
 
@@ -139,7 +174,7 @@ Normal command-domain outcomes stay in `ExecuteHandlerResponse`. The implemented
 | `INVALID_ARGUMENT` | Invalid database path/name, UUID, range/limit/mode/consistency, query keys/items, schema JSON, schema kind, rebuild identity, or required routing values explicitly checked by a service. |
 | `NOT_FOUND` | Database, handler, schema, command ID, or partition not found. |
 | `ALREADY_EXISTS` | Database directory/registry entry already exists. |
-| `FAILED_PRECONDITION` | State rebuild requested for the active or future partition. |
+| `FAILED_PRECONDITION` | State rebuild requested for the active or future partition; `PrepareDecision` or `CompleteDecision` called while `RemoteDecisions` is absent or invalid. |
 | `RESOURCE_EXHAUSTED` | Follow/subscription live queue overflow. |
 | `UNAVAILABLE` | Database not write-available, writer lock contention, event-store fault, I/O, or access failure. |
 | `DATA_LOSS` | Invalid/corrupt authoritative metadata or partition data. |
@@ -152,4 +187,4 @@ Every transport `RpcException` created by `ProtocolMapper` carries a serialized 
 
 ## Not Implemented
 
-Authentication/authorization, audit records, external statement history, pagination, protocol negotiation, configurable message limits, durable subscriptions, server retry hints, and standard `google.rpc.Status` details are future work.
+Authentication/authorization, audit records, external statement history, pagination, protocol negotiation, configurable message limits, durable subscriptions, remote-decision retry orchestration, server retry hints, and standard `google.rpc.Status` details are future work. Remote preparation currently requires a normal executable handler plan with emissions; model-only plans remain separate future work and are not implemented by these RPCs.

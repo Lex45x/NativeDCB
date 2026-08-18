@@ -33,6 +33,8 @@ service CatalogService {
 // CommandService executes registered handlers and reconciles committed commands.
 service CommandService {
   rpc ExecuteHandler(ExecuteHandlerRequest) returns (ExecuteHandlerResponse);
+  rpc PrepareDecision(PrepareDecisionRequest) returns (PrepareDecisionResponse);
+  rpc CompleteDecision(CompleteDecisionRequest) returns (CompleteDecisionResponse);
   rpc GetEventsByCommandId(GetEventsByCommandIdRequest) returns (GetEventsByCommandIdResponse);
 }
 
@@ -396,6 +398,67 @@ message AlreadyCommitted {
 
 message CommandFailed {
   ErrorDetail error = 1;
+}
+
+message PrepareDecisionRequest {
+  string database = 1;
+  string handler_name = 2;
+  optional string command_id = 3;
+  bytes command_json = 4;
+}
+
+message PrepareDecisionResponse {
+  string command_id = 1;
+  string command_type = 2;
+  oneof outcome {
+    PreparedDecision prepared = 3;
+    AlreadyCommitted already_committed = 4;
+    CommandFailed failed = 5;
+  }
+}
+
+message PreparedDecision {
+  bytes model_json = 1;
+  bytes model_signature = 2;
+  google.protobuf.Timestamp expires_utc = 3;
+  string plan_fingerprint = 4;
+}
+
+message CompleteDecisionRequest {
+  string database = 1;
+  bytes model_signature = 2;
+  repeated ProposedEvent proposed_events = 3;
+}
+
+message ProposedEvent {
+  string type = 1;
+  bytes data_json = 2;
+}
+
+message CompleteDecisionResponse {
+  string command_id = 1;
+  string command_type = 2;
+  oneof outcome {
+    Committed committed = 3;
+    AlreadyCommitted already_committed = 4;
+    DecisionStale stale = 5;
+    DecisionExpired expired = 6;
+    DecisionInvalidated invalidated = 7;
+    CommandFailed failed = 8;
+  }
+}
+
+message DecisionStale {
+  int64 current_head = 1;
+}
+
+message DecisionExpired {
+  google.protobuf.Timestamp expires_utc = 1;
+}
+
+message DecisionInvalidated {
+  string code = 1;
+  string message = 2;
 }
 
 message GetEventsByCommandIdRequest {
