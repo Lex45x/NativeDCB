@@ -1,7 +1,7 @@
 # NativeDCB Decision Language
 
 Status: implemented NDL v1 subset and known limitations  
-Last verified: 2026-08-14
+Last verified: 2026-08-19
 
 ## Overview
 
@@ -118,7 +118,7 @@ Emission order is batch order. A registered event schema checks required/types/a
 
 ### NDL handler registration
 
-`CatalogService.RegisterHandler` parses source, requires exactly one decision, checks command-type equality, keyed includes, duplicate object assignments, supported calls in `apply`/`emit`, and available event schemas. It then compiles the plan, adds current schema fingerprints, serializes it as JSON, computes source/plan SHA-256 fingerprints, and saves source plus plan in `catalog_v1.json`.
+`CatalogService.RegisterHandler` enters the database-keyed Handler actor. The actor parses source, requires exactly one decision, checks command-type equality, keyed includes, duplicate object assignments, supported calls in `apply`/`emit`, and available event schemas obtained from the Schema actor. It then compiles the plan, adds current schema fingerprints, serializes it as JSON, computes source/plan SHA-256 fingerprints, and saves source plus plan in `handlers_v1.json`.
 
 The request's `handler_name` is the catalog key. The compiled decision's name is not currently required to equal that handler name. At execution the stored compiled plan is authoritative; source is retained for inspection and reparsing helpers.
 
@@ -134,7 +134,7 @@ The .NET SDK serializes its `sdk-v1` `DecisionPlan` directly in `plan_json`. The
 
 ### Execution
 
-The Transaction grain validates the stored plan fingerprint, captures a committed read snapshot, interprets plan expressions, and conditionally appends. Append conflicts cause an unbounded retry within the gRPC request lifetime. See [Internal Engine](internal-engine.md).
+The command-keyed Decision actor validates the stored plan fingerprint, asks Index Orchestrator for an authoritative indexed-prefix plus reader-tail snapshot, interprets plan expressions, and conditionally appends through Main. Append conflicts cause an unbounded retry within the gRPC request lifetime. See [Internal Engine](internal-engine.md).
 
 ## Diagnostics
 

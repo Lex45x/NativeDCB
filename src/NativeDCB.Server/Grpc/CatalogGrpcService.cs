@@ -1,113 +1,82 @@
-using System.Collections.Concurrent;
-using System.Text.Json;
-
 using Google.Protobuf;
 
 using Grpc.Core;
 
-using NativeDCB.Model.Databases;
-using NativeDCB.Model.Decisions;
-using NativeDCB.Ndl.Compilation;
-using NativeDCB.Ndl.Formatting;
-using NativeDCB.Ndl.Parsing;
+using NativeDCB.Actors.Contracts;
+using NativeDCB.Actors.Messages;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Catalog;
-using NativeDCB.Server.Catalog.Schemas;
-using NativeDCB.Server.Databases;
-using NativeDCB.Server.Decisions.Execution;
+using NativeDCB.Server.Decisions.Transactions;
 using NativeDCB.Server.Grpc.Infrastructure;
 
-using DiagnosticSeverity = NativeDCB.Protocol.V1.DiagnosticSeverity;
+using ProtocolDiagnosticSeverity = NativeDCB.Protocol.V1.DiagnosticSeverity;
 
 namespace NativeDCB.Server.Grpc;
 
-public sealed class CatalogGrpcService(DatabaseRegistry registry) : CatalogService.CatalogServiceBase
+public sealed class CatalogGrpcService(IGrainFactory grains) : CatalogService.CatalogServiceBase
 {
-    public override Task<RegisterSchemaResponse> RegisterEventSchema(RegisterSchemaRequest request,
+    public override async Task<RegisterSchemaResponse> RegisterEventSchema(
+        RegisterSchemaRequest request,
         ServerCallContext context)
     {
-        return RegisterSchemaAsync(request, eventSchema: true, context.CancellationToken);
+        return await RegisterSchemaAsync(request, ActorSchemaKind.Event, context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    public override Task<RegisterSchemaResponse> RegisterCommandSchema(RegisterSchemaRequest request,
+    public override async Task<RegisterSchemaResponse> RegisterCommandSchema(
+        RegisterSchemaRequest request,
         ServerCallContext context)
     {
-        return RegisterSchemaAsync(request, eventSchema: false, context.CancellationToken);
+        return await RegisterSchemaAsync(request, ActorSchemaKind.Command, context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    public override async Task<RemoveSchemaResponse> RemoveSchema(RemoveSchemaRequest request,
+    public override async Task<RemoveSchemaResponse> RemoveSchema(
+        RemoveSchemaRequest request,
         ServerCallContext context)
     {
-        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
+        ISchemaGrain grain = grains.GetGrain<ISchemaGrain>(request.Database);
+        SchemaRemoveResultMessage? result = await CallAsync(
+                token => grain.RemoveAsync(
+                    new SchemaLookupMessage(request.SchemaName, ToActorKind(request.SchemaKind)), token),
+                context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        EnsureCatalogWritable(database);
-        ConcurrentDictionary<string, SchemaCatalogEntry> schemas = request.SchemaKind switch
-        {
-            SchemaKind.Event => database.Catalog.EventSchemas,
-            SchemaKind.Command => database.Catalog.CommandSchemas,
-            _ => throw ProtocolMapper.InvalidArgument("A schema kind is required.")
-        };
-
-        await database.CatalogLock.WaitAsync(context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        try
-        {
-            if (!schemas.TryRemove(request.SchemaName, out SchemaCatalogEntry? removed))
-            {
-                throw ProtocolMapper.NotFound($"Schema '{request.SchemaName}' was not found.");
-            }
-
-            try
-            {
-                await database.SaveCatalogAsync(context.CancellationToken)
-                    .ConfigureAwait(continueOnCapturedContext: false);
-                return new RemoveSchemaResponse { RemovedFingerprint = removed.Fingerprint };
-            }
-            catch
-            {
-                schemas[request.SchemaName] = removed;
-                throw;
-            }
-        }
-        finally
-        {
-            database.CatalogLock.Release();
-        }
-    }
-
-    public override async Task<GetSchemaResponse> GetSchema(GetSchemaRequest request, ServerCallContext context)
-    {
-        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        ConcurrentDictionary<string, SchemaCatalogEntry> schemas = Schemas(database, request.SchemaKind);
-        if (!schemas.TryGetValue(request.SchemaName, out SchemaCatalogEntry? schema))
+        if (result is null)
         {
             throw ProtocolMapper.NotFound($"Schema '{request.SchemaName}' was not found.");
         }
 
-        return new GetSchemaResponse { Schema = ProtocolMapper.ToSchema(schema, request.SchemaKind) };
+        return new RemoveSchemaResponse { RemovedFingerprint = result.Fingerprint };
     }
 
-    public override async Task<ListSchemasResponse> ListSchemas(ListSchemasRequest request, ServerCallContext context)
+    public override async Task<GetSchemaResponse> GetSchema(
+        GetSchemaRequest request,
+        ServerCallContext context)
     {
-        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
+        ISchemaGrain grain = grains.GetGrain<ISchemaGrain>(request.Database);
+        SchemaRegistrationMessage? result = await CallAsync(
+                token => grain.GetAsync(
+                    new SchemaLookupMessage(request.SchemaName, ToActorKind(request.SchemaKind)), token),
+                context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        IEnumerable<SchemaSummary> schemas = request.SchemaKind switch
+        if (result is null)
         {
-            SchemaKind.Unspecified => database.Catalog.EventSchemas.Values
-                .Select(value => ProtocolMapper.ToSchemaSummary(value, SchemaKind.Event))
-                .Concat(database.Catalog.CommandSchemas.Values.Select(value =>
-                    ProtocolMapper.ToSchemaSummary(value, SchemaKind.Command))),
-            SchemaKind.Event => database.Catalog.EventSchemas.Values.Select(value =>
-                ProtocolMapper.ToSchemaSummary(value, SchemaKind.Event)),
-            SchemaKind.Command => database.Catalog.CommandSchemas.Values.Select(value =>
-                ProtocolMapper.ToSchemaSummary(value, SchemaKind.Command)),
-            _ => throw ProtocolMapper.InvalidArgument("The schema kind is invalid.")
-        };
+            throw ProtocolMapper.NotFound($"Schema '{request.SchemaName}' was not found.");
+        }
+
+        return new GetSchemaResponse { Schema = ToSchema(result) };
+    }
+
+    public override async Task<ListSchemasResponse> ListSchemas(
+        ListSchemasRequest request,
+        ServerCallContext context)
+    {
+        ISchemaGrain grain = grains.GetGrain<ISchemaGrain>(request.Database);
+        SchemaListMessage result = await CallAsync(
+                token => grain.ListAsync(ToActorListKind(request.SchemaKind), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
         ListSchemasResponse response = new();
-        response.Schemas.AddRange(schemas
-            .OrderBy(value => value.SchemaKind)
-            .ThenBy(value => value.SchemaName, StringComparer.Ordinal));
+        response.Schemas.AddRange(result.Schemas.Select(ToSchemaSummary));
         return response;
     }
 
@@ -115,237 +84,99 @@ public sealed class CatalogGrpcService(DatabaseRegistry registry) : CatalogServi
         RegisterHandlerRequest request,
         ServerCallContext context)
     {
-        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
+        IHandlerGrain grain = grains.GetGrain<IHandlerGrain>(request.Database);
+        HandlerRegistrationResultMessage result = await CallAsync(
+                token => grain.RegisterAsync(new RegisterHandlerMessage(
+                    request.HandlerName,
+                    request.CommandType,
+                    request.NdlSource,
+                    ProtocolMapper.Utf8Text(request.PlanJson),
+                    request.AllowIncompatible), token),
+                context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        EnsureCatalogWritable(database);
-        if (string.IsNullOrWhiteSpace(request.HandlerName) || string.IsNullOrWhiteSpace(request.CommandType))
-        {
-            throw ProtocolMapper.InvalidArgument("Handler name and command type are required.");
-        }
-
-        Dictionary<string, RegisteredJsonSchema> eventSchemas = ParseEventSchemas(database);
-        HandlerDescription description = new()
-        {
-            HandlerName = request.HandlerName, CommandType = request.CommandType, NdlSource = request.NdlSource
-        };
-        string planJson = string.Empty;
-        if (request.PlanJson.Length > 0)
-        {
-            try
-            {
-                DecisionPlan plan = JsonSerializer.Deserialize<DecisionPlan>(
-                                        request.PlanJson.Span, DatabaseRegistry.JsonOptions)
-                                    ?? throw new JsonException("The decision plan is empty.");
-                foreach (string error in ValidatePlan(plan, request, eventSchemas, database))
-                {
-                    description.Diagnostics.Add(ErrorDiagnostic("PLAN2001", error));
-                }
-
-                planJson = JsonSerializer.Serialize(plan, DatabaseRegistry.JsonOptions);
-                description.SourceFingerprint = plan.Fingerprints.SourceFingerprint;
-            }
-            catch (JsonException exception)
-            {
-                description.Diagnostics.Add(ErrorDiagnostic("PLAN1001", exception.Message));
-            }
-        }
-        else
-        {
-            ParseResult parsed = Ndl.Ndl.Parse(request.NdlSource);
-            description.SourceFingerprint = DatabaseRegistry.Fingerprint(request.NdlSource);
-            description.Diagnostics.AddRange(parsed.Diagnostics.Select(x =>
-                ProtocolMapper.ToDiagnostic(x, parsed.Source)));
-            IReadOnlyList<string> semanticErrors = parsed.HasErrors
-                ? []
-                : NdlDecisionRuntime.ValidateDecision(parsed, request.CommandType, eventSchemas);
-            foreach (string error in semanticErrors)
-            {
-                description.Diagnostics.Add(ErrorDiagnostic("NDL2001", error));
-            }
-
-            if (!parsed.HasErrors && semanticErrors.Count == 0)
-            {
-                CompilationResult compilation = Ndl.Ndl.Compile(request.NdlSource);
-                DecisionPlan plan = AssertSinglePlan(compilation, request.HandlerName) with
-                {
-                    Fingerprints = compilation.Plans[index: 0].Fingerprints with
-                    {
-                        SchemaFingerprints = database.Catalog.EventSchemas.Values
-                            .Concat(database.Catalog.CommandSchemas.Values)
-                            .ToDictionary(schema => schema.Name, schema => schema.Fingerprint, StringComparer.Ordinal)
-                    }
-                };
-                planJson = JsonSerializer.Serialize(plan, DatabaseRegistry.JsonOptions);
-            }
-        }
-
-        description.Valid = description.Diagnostics.All(x => x.Severity != DiagnosticSeverity.Error);
-        if (!description.Valid)
-        {
-            return new RegisterHandlerResponse { Handler = description };
-        }
-
-        description.PlanFingerprint = DatabaseRegistry.Fingerprint(planJson);
-        HandlerCatalogEntry registration = new(
-            request.HandlerName,
-            request.CommandType,
-            request.NdlSource,
-            description.SourceFingerprint,
-            description.PlanFingerprint,
-            planJson);
-        await database.CatalogLock.WaitAsync(context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        try
-        {
-            bool hadPrevious = database.Catalog.Handlers.TryGetValue(
-                request.HandlerName, out HandlerCatalogEntry? previous);
-            database.Catalog.Handlers[request.HandlerName] = registration;
-            try
-            {
-                await database.SaveCatalogAsync(context.CancellationToken)
-                    .ConfigureAwait(continueOnCapturedContext: false);
-            }
-            catch
-            {
-                if (hadPrevious)
-                {
-                    database.Catalog.Handlers[request.HandlerName] = previous!;
-                }
-                else
-                {
-                    database.Catalog.Handlers.TryRemove(request.HandlerName, out _);
-                }
-
-                throw;
-            }
-        }
-        finally
-        {
-            database.CatalogLock.Release();
-        }
-
-        return new RegisterHandlerResponse { Handler = description };
+        ThrowIfError(result.Error);
+        return new RegisterHandlerResponse { Handler = ToHandler(result.Handler) };
     }
 
-    public override async Task<RemoveHandlerResponse> RemoveHandler(RemoveHandlerRequest request,
+    public override async Task<RemoveHandlerResponse> RemoveHandler(
+        RemoveHandlerRequest request,
         ServerCallContext context)
     {
-        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
+        IHandlerGrain grain = grains.GetGrain<IHandlerGrain>(request.Database);
+        HandlerRemoveResultMessage? result = await CallAsync(
+                token => grain.RemoveAsync(request.HandlerName, token),
+                context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        EnsureCatalogWritable(database);
-        await database.CatalogLock.WaitAsync(context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        try
-        {
-            if (!database.Catalog.Handlers.TryRemove(request.HandlerName, out HandlerCatalogEntry? removed))
-            {
-                throw ProtocolMapper.NotFound($"Handler '{request.HandlerName}' was not found.");
-            }
-
-            try
-            {
-                await database.SaveCatalogAsync(context.CancellationToken)
-                    .ConfigureAwait(continueOnCapturedContext: false);
-                return new RemoveHandlerResponse
-                {
-                    RemovedSourceFingerprint = removed.SourceFingerprint,
-                    RemovedPlanFingerprint = removed.PlanFingerprint
-                };
-            }
-            catch
-            {
-                database.Catalog.Handlers[request.HandlerName] = removed;
-                throw;
-            }
-        }
-        finally
-        {
-            database.CatalogLock.Release();
-        }
-    }
-
-    public override async Task<GetHandlerResponse> GetHandler(GetHandlerRequest request, ServerCallContext context)
-    {
-        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        if (!database.Catalog.Handlers.TryGetValue(request.HandlerName, out HandlerCatalogEntry? handler))
+        if (result is null)
         {
             throw ProtocolMapper.NotFound($"Handler '{request.HandlerName}' was not found.");
         }
 
-        HandlerDescription description = ProtocolMapper.ToHandler(handler);
-        if (request.IncludePlanJson)
+        return new RemoveHandlerResponse
         {
-            description.PlanJson = ByteString.CopyFromUtf8(handler.PlanJson);
-        }
-
-        if (request.GenerateNdl)
-        {
-            NdlPlanFormatResult generated = Ndl.Ndl.TryFormat(handler.ParsePlan());
-            if (generated.Success)
-            {
-                description.GeneratedNdl = generated.NdlSource;
-            }
-            else
-            {
-                description.NdlGenerationDiagnostics.AddRange(generated.Diagnostics.Select(value => new Diagnostic
-                {
-                    Code = "NDL3001",
-                    Severity = DiagnosticSeverity.Error,
-                    Message = $"{value.Path}: {value.Message}"
-                }));
-            }
-        }
-
-        return new GetHandlerResponse { Handler = description };
+            RemovedSourceFingerprint = result.SourceFingerprint,
+            RemovedPlanFingerprint = result.PlanFingerprint
+        };
     }
 
-    public override async Task<ListHandlersResponse> ListHandlers(ListHandlersRequest request,
+    public override async Task<GetHandlerResponse> GetHandler(
+        GetHandlerRequest request,
         ServerCallContext context)
     {
-        DatabaseEntry database = await GetDatabaseAsync(request.Database, context.CancellationToken)
+        IHandlerGrain grain = grains.GetGrain<IHandlerGrain>(request.Database);
+        HandlerDescriptionMessage? result = await CallAsync(
+                token => grain.GetAsync(new GetHandlerMessage(
+                    request.HandlerName, request.IncludePlanJson, request.GenerateNdl), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        if (result is null)
+        {
+            throw ProtocolMapper.NotFound($"Handler '{request.HandlerName}' was not found.");
+        }
+
+        return new GetHandlerResponse { Handler = ToHandler(result) };
+    }
+
+    public override async Task<ListHandlersResponse> ListHandlers(
+        ListHandlersRequest request,
+        ServerCallContext context)
+    {
+        IHandlerGrain grain = grains.GetGrain<IHandlerGrain>(request.Database);
+        HandlerListMessage result = await CallAsync(
+                grain.ListAsync,
+                context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
         ListHandlersResponse response = new();
-        response.Handlers.AddRange(database.Catalog.Handlers.Values
-            .OrderBy(x => x.Name, StringComparer.Ordinal)
-            .Select(ProtocolMapper.ToHandlerSummary));
+        response.Handlers.AddRange(result.Handlers.Select(ToHandlerSummary));
         return response;
     }
 
-    public override async Task<ValidateNdlResponse> ValidateNdl(ValidateNdlRequest request, ServerCallContext context)
+    public override async Task<ValidateNdlResponse> ValidateNdl(
+        ValidateNdlRequest request,
+        ServerCallContext context)
     {
-        DatabaseEntry database = await GetDatabaseAsync(
-            request.Database, context.CancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        Dictionary<string, RegisteredJsonSchema> eventSchemas = ParseEventSchemas(database);
-        foreach (TransientSchema transient in request.TransientSchemas)
-        {
-            if (transient.SchemaKind == SchemaKind.Event)
-            {
-                string document = ProtocolMapper.Utf8Text(transient.SchemaDocumentJson);
-                eventSchemas[transient.SchemaName] = RegisteredJsonSchema.Parse(
-                    transient.SchemaName, document, eventSchema: true);
-            }
-            else if (transient.SchemaKind != SchemaKind.Command)
-            {
-                throw ProtocolMapper.InvalidArgument("A transient schema kind is required.");
-            }
-        }
+        IHandlerGrain grain = grains.GetGrain<IHandlerGrain>(request.Database);
+        NdlValidationResultMessage result = await CallAsync(
+                token => grain.ValidateNdlAsync(new ValidateNdlMessage(
+                    request.NdlSource,
+                    request.TransientSchemas.Select(value => new TransientSchemaMessage(
+                        ToActorListKind(value.SchemaKind),
+                        value.SchemaName,
+                        ProtocolMapper.Utf8Text(value.SchemaDocumentJson))).ToArray()), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        ThrowIfError(result.Error);
 
-        ParseResult parsed = Ndl.Ndl.Parse(request.NdlSource);
-        ValidateNdlResponse response = new() { Valid = !parsed.HasErrors };
-        response.Diagnostics.AddRange(parsed.Diagnostics.Select(x => ProtocolMapper.ToDiagnostic(x, parsed.Source)));
-        if (!parsed.HasErrors)
+        ValidateNdlResponse response = new() { Valid = result.Valid };
+        response.Diagnostics.AddRange(result.Diagnostics.Select(ToDiagnostic));
+        if (result.Plan is not null)
         {
-            foreach (string error in NdlDecisionRuntime.ValidateDecision(parsed, eventSchemas: eventSchemas))
+            response.Plan = new PlanSummary
             {
-                response.Diagnostics.Add(ErrorDiagnostic("NDL2001", error));
-            }
-
-            response.Valid = response.Diagnostics.All(x => x.Severity != DiagnosticSeverity.Error);
-            if (response.Valid)
-            {
-                response.Plan = ProtocolMapper.ToPlan(parsed);
-            }
+                PlanFingerprint = result.Plan.Fingerprint,
+                RedactedSummary = result.Plan.RedactedSummary
+            };
+            response.Plan.Operations.AddRange(result.Plan.Operations);
         }
 
         return response;
@@ -353,196 +184,185 @@ public sealed class CatalogGrpcService(DatabaseRegistry registry) : CatalogServi
 
     private async Task<RegisterSchemaResponse> RegisterSchemaAsync(
         RegisterSchemaRequest request,
-        bool eventSchema,
+        ActorSchemaKind kind,
         CancellationToken cancellationToken)
     {
-        DatabaseEntry database = await GetDatabaseAsync(request.Database, cancellationToken)
+        ISchemaGrain grain = grains.GetGrain<ISchemaGrain>(request.Database);
+        SchemaRegistrationResultMessage result = await CallAsync(
+                token => grain.RegisterAsync(new RegisterSchemaMessage(
+                    request.SchemaName,
+                    kind,
+                    ProtocolMapper.Utf8Text(request.SchemaDocumentJson),
+                    request.AllowIncompatible), token),
+                cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        EnsureCatalogWritable(database);
-        if (string.IsNullOrWhiteSpace(request.SchemaName))
-        {
-            throw ProtocolMapper.InvalidArgument("A schema name is required.");
-        }
-
-        string document = ProtocolMapper.Utf8Text(request.SchemaDocumentJson);
-        RegisteredJsonSchema parsedSchema;
-        try
-        {
-            parsedSchema = RegisteredJsonSchema.Parse(request.SchemaName, document, eventSchema);
-        }
-        catch (Exception exception) when (exception is JsonException or InvalidDataException)
-        {
-            throw ProtocolMapper.InvalidArgument($"Invalid schema JSON: {exception.Message}");
-        }
-
-        string fingerprint = DatabaseRegistry.Fingerprint(document);
-        SchemaCatalogEntry entry = new(request.SchemaName, document, fingerprint);
-        await database.CatalogLock.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        try
-        {
-            ConcurrentDictionary<string, SchemaCatalogEntry> schemas = eventSchema
-                ? database.Catalog.EventSchemas
-                : database.Catalog.CommandSchemas;
-            bool hadPrevious = schemas.TryGetValue(request.SchemaName, out SchemaCatalogEntry? previous);
-            if (previous is not null)
-            {
-                RegisteredJsonSchema previousSchema = RegisteredJsonSchema.Parse(
-                    previous.Name, previous.DocumentJson, eventSchema);
-                IReadOnlyList<string> incompatibilities = parsedSchema.CompatibilityErrors(previousSchema);
-                if (incompatibilities.Count > 0 && !request.AllowIncompatible)
-                {
-                    RegisterSchemaResponse incompatible = new() { Fingerprint = fingerprint };
-                    incompatible.Diagnostics.AddRange(incompatibilities.Select(message =>
-                        ErrorDiagnostic("SCHEMA2001", message)));
-                    return incompatible;
-                }
-            }
-
-            schemas[request.SchemaName] = entry;
-            try
-            {
-                await database.SaveCatalogAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            }
-            catch
-            {
-                if (hadPrevious)
-                {
-                    schemas[request.SchemaName] = previous!;
-                }
-                else
-                {
-                    schemas.TryRemove(request.SchemaName, out _);
-                }
-
-                throw;
-            }
-        }
-        finally
-        {
-            database.CatalogLock.Release();
-        }
-
-        return new RegisterSchemaResponse { Fingerprint = fingerprint };
+        ThrowIfError(result.Error);
+        RegisterSchemaResponse response = new() { Fingerprint = result.Fingerprint };
+        response.Diagnostics.AddRange(result.Diagnostics.Select(ToDiagnostic));
+        return response;
     }
 
-    private async Task<DatabaseEntry> GetDatabaseAsync(string name, CancellationToken cancellationToken)
+    private static async Task<T> CallAsync<T>(
+        Func<GrainCancellationToken, Task<T>> call,
+        CancellationToken cancellationToken)
     {
         try
         {
-            return await registry.GetAsync(name, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            return await GrainCall.RunAsync(call, cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (exception is not RpcException and not OperationCanceledException)
         {
-            throw ProtocolMapper.InvalidArgument(exception.Message);
+            Exception root = exception.GetBaseException();
+            throw root switch
+            {
+                ArgumentException => ProtocolMapper.InvalidArgument(root.Message),
+                DirectoryNotFoundException => ProtocolMapper.NotFound(root.Message),
+                InvalidDataException => ProtocolMapper.DataLoss(root.Message),
+                IOException => ProtocolMapper.Unavailable(root.Message),
+                UnauthorizedAccessException => ProtocolMapper.Unavailable(root.Message),
+                _ => exception
+            };
         }
-        catch (KeyNotFoundException exception)
+    }
+
+    private static void ThrowIfError(CatalogErrorMessage? error)
+    {
+        if (error is null || error.Kind == CatalogErrorKind.None)
         {
-            throw ProtocolMapper.NotFound(exception.Message);
+            return;
         }
-    }
 
-    private static Diagnostic ErrorDiagnostic(string code, string message)
-    {
-        return new Diagnostic { Code = code, Severity = DiagnosticSeverity.Error, Message = message };
-    }
-
-    private static Dictionary<string, RegisteredJsonSchema> ParseEventSchemas(DatabaseEntry database)
-    {
-        return database.Catalog.EventSchemas.Values.ToDictionary(
-            schema => schema.Name,
-            schema => RegisteredJsonSchema.Parse(schema.Name, schema.DocumentJson, eventSchema: true),
-            StringComparer.Ordinal);
-    }
-
-    private static DecisionPlan AssertSinglePlan(CompilationResult compilation, string handlerName)
-    {
-        if (compilation.HasErrors || compilation.Plans.Count != 1)
+        throw error.Kind switch
         {
-            throw new InvalidDataException($"Handler '{handlerName}' did not compile to exactly one decision plan.");
-        }
-
-        return compilation.Plans[index: 0];
+            CatalogErrorKind.InvalidArgument => ProtocolMapper.InvalidArgument(error.Message),
+            _ => ProtocolMapper.Internal(error.Message)
+        };
     }
 
-    private static void EnsureCatalogWritable(DatabaseEntry database)
-    {
-        if (database.Status is not (DatabaseStatus.Recovering or DatabaseStatus.Ready))
-        {
-            throw ProtocolMapper.Unavailable(
-                $"Database '{database.Name}' does not accept catalog changes while in state '{database.Status}'.");
-        }
-    }
-
-    private static ConcurrentDictionary<string, SchemaCatalogEntry> Schemas(
-        DatabaseEntry database,
-        SchemaKind kind)
+    private static ActorSchemaKind ToActorKind(SchemaKind kind)
     {
         return kind switch
         {
-            SchemaKind.Event => database.Catalog.EventSchemas,
-            SchemaKind.Command => database.Catalog.CommandSchemas,
+            SchemaKind.Event => ActorSchemaKind.Event,
+            SchemaKind.Command => ActorSchemaKind.Command,
             _ => throw ProtocolMapper.InvalidArgument("A schema kind is required.")
         };
     }
 
-    private static IReadOnlyList<string> ValidatePlan(
-        DecisionPlan plan,
-        RegisterHandlerRequest request,
-        IReadOnlyDictionary<string, RegisteredJsonSchema> eventSchemas,
-        DatabaseEntry database)
+    private static ActorSchemaKind ToActorListKind(SchemaKind kind)
     {
-        List<string> errors = new();
-        if (string.IsNullOrWhiteSpace(plan.Name) ||
-            !string.Equals(plan.CommandSchema, request.CommandType, StringComparison.Ordinal))
+        return kind switch
         {
-            errors.Add("The plan must have a name and its command schema must match command_type.");
+            SchemaKind.Unspecified => ActorSchemaKind.Unspecified,
+            SchemaKind.Event => ActorSchemaKind.Event,
+            SchemaKind.Command => ActorSchemaKind.Command,
+            _ => throw ProtocolMapper.InvalidArgument("The schema kind is invalid.")
+        };
+    }
+
+    private static SchemaDescription ToSchema(SchemaRegistrationMessage value)
+    {
+        return new SchemaDescription
+        {
+            SchemaName = value.Name,
+            SchemaKind = ToProtocolKind(value.Kind),
+            Fingerprint = value.Fingerprint,
+            SchemaDocumentJson = ByteString.CopyFromUtf8(value.DocumentJson)
+        };
+    }
+
+    private static SchemaSummary ToSchemaSummary(SchemaRegistrationMessage value)
+    {
+        return new SchemaSummary
+        {
+            SchemaName = value.Name,
+            SchemaKind = ToProtocolKind(value.Kind),
+            Fingerprint = value.Fingerprint
+        };
+    }
+
+    private static SchemaKind ToProtocolKind(ActorSchemaKind kind)
+    {
+        return kind switch
+        {
+            ActorSchemaKind.Event => SchemaKind.Event,
+            ActorSchemaKind.Command => SchemaKind.Command,
+            _ => SchemaKind.Unspecified
+        };
+    }
+
+    private static HandlerDescription ToHandler(HandlerDescriptionMessage value)
+    {
+        HandlerDescription result = new()
+        {
+            HandlerName = value.Name,
+            CommandType = value.CommandType,
+            NdlSource = value.NdlSource,
+            SourceFingerprint = value.SourceFingerprint,
+            PlanFingerprint = value.PlanFingerprint,
+            Valid = value.Valid
+        };
+        result.Diagnostics.AddRange(value.Diagnostics.Select(ToDiagnostic));
+        if (value.PlanJson is not null)
+        {
+            result.PlanJson = ByteString.CopyFromUtf8(value.PlanJson);
         }
 
-        if (plan.Fingerprints.LanguageVersion is not ("ndl-v1" or "sdk-v1") ||
-            string.IsNullOrWhiteSpace(plan.Fingerprints.SourceFingerprint))
+        if (value.GeneratedNdl is not null)
         {
-            errors.Add("The plan language version or source fingerprint is invalid.");
+            result.GeneratedNdl = value.GeneratedNdl;
         }
 
-        if (plan.Includes.Count == 0 || plan.Includes.Any(include =>
-                string.IsNullOrWhiteSpace(include.EventType) || include.KeyBindings.Count == 0))
-        {
-            errors.Add("Every plan must include at least one keyed event specification.");
-        }
+        result.NdlGenerationDiagnostics.AddRange(value.NdlGenerationDiagnostics.Select(ToDiagnostic));
+        return result;
+    }
 
-        if (plan.Emissions.Count == 0)
+    private static HandlerSummary ToHandlerSummary(HandlerSummaryMessage value)
+    {
+        return new HandlerSummary
         {
-            errors.Add("An accepted plan must emit at least one event.");
-        }
+            HandlerName = value.Name,
+            CommandType = value.CommandType,
+            SourceFingerprint = value.SourceFingerprint,
+            PlanFingerprint = value.PlanFingerprint,
+            Valid = value.Valid
+        };
+    }
 
-        foreach (PlanInclude include in plan.Includes)
+    private static Diagnostic ToDiagnostic(ActorDiagnosticMessage value)
+    {
+        Diagnostic result = new()
         {
-            if (eventSchemas.TryGetValue(include.EventType, out RegisteredJsonSchema? schema))
+            Code = value.Code,
+            Severity = value.Severity switch
             {
-                foreach (PlanKeyBinding binding in include.KeyBindings)
-                {
-                    try
-                    {
-                        _ = schema.ResolveKeyName(binding.PropertyName);
-                    }
-                    catch (InvalidOperationException exception)
-                    {
-                        errors.Add(exception.Message);
-                    }
-                }
-            }
-        }
-
-        foreach ((string name, string fingerprint) in plan.Fingerprints.SchemaFingerprints)
+                ActorDiagnosticSeverity.Info => ProtocolDiagnosticSeverity.Info,
+                ActorDiagnosticSeverity.Warning => ProtocolDiagnosticSeverity.Warning,
+                ActorDiagnosticSeverity.Error => ProtocolDiagnosticSeverity.Error,
+                _ => ProtocolDiagnosticSeverity.Unspecified
+            },
+            Message = value.Message
+        };
+        if (value.SourceSpan is not null)
         {
-            SchemaCatalogEntry? current = database.Catalog.EventSchemas.GetValueOrDefault(name) ??
-                                          database.Catalog.CommandSchemas.GetValueOrDefault(name);
-            if (current is not null && !string.Equals(current.Fingerprint, fingerprint, StringComparison.Ordinal))
+            result.SourceSpan = new SourceSpan
             {
-                errors.Add($"Plan schema fingerprint for '{name}' does not match the current catalog.");
-            }
+                Start = ToPosition(value.SourceSpan.Start),
+                End = ToPosition(value.SourceSpan.End)
+            };
         }
 
-        return errors;
+        return result;
+    }
+
+    private static SourcePosition ToPosition(ActorSourcePositionMessage value)
+    {
+        return new SourcePosition
+        {
+            Line = checked(value.Line + 1),
+            Column = checked(value.Column + 1),
+            Offset = value.Offset
+        };
     }
 }

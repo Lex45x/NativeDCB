@@ -1,7 +1,7 @@
 # NativeDCB gRPC API
 
 Status: implemented `nativedcb.v1` protocol reference  
-Last verified: 2026-08-18
+Last verified: 2026-08-19
 
 ## Contract
 
@@ -29,14 +29,14 @@ The browser's `NativeDCB:ServerAddress` is public static configuration in `src/N
 
 | RPC | Implemented behavior |
 |---|---|
-| `ListDatabases` | Lists discovered registry entries without opening them. Returns state, currently loaded head, read/write flags, and fault. A discovered unopened database reports head `0`. |
-| `CreateDatabase` | Creates a non-existing relative directory, metadata, partition 1, empty catalog, and opens it Ready at head 0. |
-| `GetDatabaseInfo` | Returns registry state, version strings `1`, loaded head/active partition, lock/read/write flags, current catalog fingerprints, and last fault. It does not open a Discovered database. |
-| `GetHealth` | Returns process `live=true` plus per-database state, `read_ready`, `write_ready`, and fault. It does not activate databases. |
-| `GetCapabilities` | Returns protocol/NDL `v1`, file format `1`, query features `range`, `type`, `keys`, `committed-scan`, subscriptions enabled, and a fixed disclosed partition limit of 10,000. The reported limit is currently not read from custom configuration. |
+| `ListDatabases` | Database Directory enumerates database directories and asks each Main actor for status without opening its store. Returns state, currently loaded head, read/write flags, and fault. A discovered unopened database reports head `0`. |
+| `CreateDatabase` | Database Directory creates a non-existing relative directory through Main, then activates Schema and Handler to create their empty files; the database is Ready at head 0. |
+| `GetDatabaseInfo` | Database Directory aggregates Main status plus Schema and Handler fingerprints. It does not open a Discovered Main store, although missing schema/handler files are created when those actors activate. |
+| `GetHealth` | Returns process `live=true` plus per-database Main state, `read_ready`, `write_ready`, and fault. It activates Main actors for status but does not open their stores. |
+| `GetCapabilities` | Returns protocol/NDL `v1`, file format `1`, query features `range`, `type`, `keys`, `committed-scan`, subscriptions enabled, and the configured `MaxEventCountPerPartition` limit. |
 | `GetHead` | Lazily opens/recovers the database and returns the Main Writer committed head. |
 
-The server also exposes HTTP `GET /health/live` (`200`, `{live:true}`) and `GET /health/ready`. Readiness is `200` only when every registry entry is `Ready` or `Discovered`; otherwise it is `503`. An empty registry is ready.
+The server also exposes HTTP `GET /health/live` (`200`, `{live:true}`) and `GET /health/ready`. Readiness asks Database Directory for filesystem-discovered databases and is `200` only when every Main status is `Ready` or `Discovered`; otherwise it is `503`. An empty root is ready.
 
 ## CatalogService
 
@@ -51,9 +51,9 @@ The server also exposes HTTP `GET /health/live` (`200`, `{live:true}`) and `GET 
 | `RemoveHandler` | Removes the current handler and returns source/plan fingerprints. |
 | `GetHandler` | Returns current source, command type, fingerprints, and `valid=true`. `include_plan_json` includes the authoritative stored plan. `generate_ndl` requests a canonical NDL representation and returns `NDL3001` generation diagnostics when lossless conversion is impossible. |
 | `ListHandlers` | Lists current handlers ordered by name. |
-| `ValidateNdl` | Parses and performs the server's limited semantic/schema validation without persistence. Event transient schemas participate; command transient schemas are accepted but not used for semantic validation. |
+| `ValidateNdl` | Handler parses and performs limited semantic/schema validation without persistence. Event transient schemas participate; command transient schemas are accepted but not used for semantic validation. |
 
-Catalog mutation requires `Recovering` or `Ready`, though recovery is performed synchronously inside the activating call and is not normally externally concurrent with a catalog request. Catalog reads expose current state, not superseded registrations or history. `allow_incompatible` affects schema replacement compatibility. It is carried for handlers but no handler compatibility override/audit logic is currently implemented.
+Schema and Handler actors load independently of Main and serialize their own mutations. Reads expose current state, not superseded registrations or history. `allow_incompatible` affects schema replacement compatibility. It is carried for handlers but no handler compatibility override/audit logic is currently implemented.
 
 Schema details are in [Requirements](requirements.md). Diagnostics currently include lexer/parser `NDL0001`-style codes, server `NDL2001`, plan `PLAN1001`/`PLAN2001`, and compatibility `SCHEMA2001`.
 
@@ -72,7 +72,7 @@ The response always echoes command ID/type and has one outcome:
 - `rejected`: currently code `DomainRejected`, reason, and `{}` details
 - `failed`: an `ErrorDetail`, most commonly `InvalidCommand`
 
-Boundary conflicts are retried inside the Transaction grain. Cancellation/deadline interrupts execution. Writer/storage failures use transport statuses rather than a `failed` outcome.
+Boundary conflicts are retried inside the command-keyed Decision actor. Cancellation/deadline interrupts execution. Writer/storage failures use transport statuses rather than a `failed` outcome.
 
 ### `PrepareDecision`
 
@@ -109,11 +109,11 @@ The command ID is the replay/idempotency boundary. Concurrent or repeated valid 
 
 ### `GetEventsByCommandId`
 
-Returns the complete committed batch for a canonical command UUID. Missing IDs, including domain-rejected attempts, return `NOT_FOUND`. For an unopened/discovered/recovering entry it recovers a committed head through shared partition-file reads without opening the store or acquiring writer ownership. If the store is already open, the read is bounded by the Main Writer's promoted head.
+Returns the complete committed batch for a canonical command UUID. Missing IDs, including domain-rejected attempts, return `NOT_FOUND`. The stateless Read actor captures a committed boundary through shared partition-file reads without opening Main or acquiring writer ownership.
 
 ## EventService
 
-Finite range, query, and type-and-key reads do not activate an unopened store. For unopened/discovered/recovering entries they recover a committed head from partition files opened for shared reading and read only through that boundary. For an already-open entry they capture the Main Writer's promoted head, so records not yet promoted after durable append are outside the snapshot. This path does not establish a broader guarantee about truly concurrent in-process writer recovery. Follow mode and `SubscribeEvents` still open the store and require writer ownership.
+All EventService methods enter Read, Index Orchestrator, or Event Subscription actors. Range snapshots and range follow capture committed boundaries from shared partition files without opening Main. `EVENTUAL_INDEX` query reads use published generations or a partition-backed fallback without opening Main. Unspecified/`COMMITTED_SCAN` query reads and query subscriptions ask Main for its promoted head and then use an authoritative index prefix plus Read tail. Partition-backed paths do not establish a broader guarantee about reads racing in-process writer recovery.
 
 ### `ReadEventsByRange`
 
@@ -121,31 +121,29 @@ Finite range, query, and type-and-key reads do not activate an unopened store. F
 - `through_event_id`, when present, is inclusive and must be greater than `after_event_id`; values beyond head are clamped to head.
 - `limit`, when present, is `1..Int32.MaxValue`.
 - unspecified and `SNAPSHOT` modes capture a finite committed head without activating an unopened store.
-- `FOLLOW` replays through a captured head, then tails in-process committed notifications. It forbids `through_event_id` and ends when its optional limit is reached.
+- `FOLLOW` opens a unique Event Subscription actor that polls range snapshots after its cursor. It forbids `through_event_id` and ends when its optional limit is reached.
 
 ### `ReadEventsByQuery`
 
-Uses the same bounds/limit rules and a DCB query. `EVENTUAL_INDEX` uses indexes only when the store is already open and every item has an event type and at least one key; otherwise it scans. It can return a stale index view. Unspecified and `COMMITTED_SCAN` scan committed partitions through the observed head.
+Uses the same bounds/limit rules and a DCB query. `EVENTUAL_INDEX` reads stateless replicas when every item has an event type and at least one key; otherwise, or when a published generation is absent/invalid, it captures a partition-backed scan. It can return a stale index view. Unspecified and `COMMITTED_SCAN` obtain Main's head and return an authoritative indexed prefix plus Read tail, or a full bounded scan when unsupported.
 
 ### `ReadEventsByTypeAndKeys`
 
-Builds one query item from one required event type and zero or more keys. A type-only request is valid and uses a partition scan because it is not index-supported. Like the other finite reads, this does not activate an unopened store.
+Builds one query item from one required event type and zero or more keys. A type-only request is valid but not index-supported. With `EVENTUAL_INDEX` it uses a partition-backed snapshot without opening Main; with unspecified or `COMMITTED_SCAN` consistency it obtains Main's head and performs a full bounded Read scan.
 
 ### `SubscribeEvents`
 
-Subscribes after an exclusive event ID. It installs a live listener, replays a committed-scan query through a captured head, deduplicates by event ID, then tails notifications. Optional simple keys are an additional AND filter over the optional DCB query. There is no durable subscription state; reconnect with the last event ID.
-
-Follow/subscription live queues hold 1,024 events. A consumer that overflows the queue receives `RESOURCE_EXHAUSTED`. Delivery is process-local and at-least-once behavior around reconnect should be assumed; event ID is the deduplication key.
+Subscribes after an exclusive event ID through a unique Event Subscription actor. The actor polls authoritative Index Orchestrator snapshots, advances a cursor, deduplicates by event ID, and applies optional simple keys as an additional AND filter over the optional DCB query. Reads are limited to 256 events per actor call; after ten empty polls separated by 100 ms it returns an empty incomplete batch and gRPC polls again. There is no live queue or durable subscription state; reconnect with the last event ID.
 
 ## StatementService
 
 ### `ExplainStatement`
 
-Parses source, applies limited server semantic/schema checks to every decision, rejects duplicate decision names, and returns diagnostics. Valid decisions receive a summary/fingerprint and query templates whose values are the placeholder `$command`. No inferred schemas are currently produced.
+Enters Handler, which parses source, applies limited semantic/schema checks to every decision, rejects duplicate decision names, and returns diagnostics. Valid decisions receive a summary/fingerprint and query templates whose values are the placeholder `$command`. No inferred schemas are currently produced.
 
 ### `ExecuteStatement`
 
-Current behavior is narrower than the result union suggests. It accepts an NDL document containing one or more uniquely named decision definitions, validates/compiles each decision independently, formats each as standalone source, and atomically publishes all current handler registrations to `catalog_v1.json` only when every decision is valid. Invalid documents, including duplicate decision names, publish none. The stream emits:
+Current behavior is narrower than the result union suggests. It accepts an NDL document containing one or more uniquely named decision definitions, enters the Handler actor, validates/compiles each decision independently, formats each as standalone source, and atomically publishes all current handler registrations to `handlers_v1.json` only when every decision is valid. Invalid documents, including duplicate decision names, publish none. The stream emits:
 
 1. a diagnostic batch when diagnostics exist,
 2. one `RegistrationResult(kind="handler")` per decision,
@@ -160,10 +158,10 @@ It does **not** execute event reads, commands, schema statements, or administrat
 | `ListPartitions` | Returns ordered partition filename, active flag, visible first/last IDs, committed count, and inspected state-file status. |
 | `ListIndexes` | Returns discovered/known index identity, hashed filename, index/main heads, lag, hydration state, and last fault. |
 | `GetStateFileStatus` | Inspects one existing partition's corresponding state file. |
-| `RequestIndexRebuild` | Requires event type and keys, sends one-way rebuilds through the coordinator, and reports queued/accepted. |
-| `RequestStateRebuild` | Requires a positive closed partition number, sends a one-way State Builder rebuild, and reports queued/accepted. |
+| `RequestIndexRebuild` | Requires event type and keys. Index Orchestrator derives each identity directly, captures a partition-backed head, and awaits all Index actor rebuild calls before returning accepted. |
+| `RequestStateRebuild` | Requires a positive closed partition number. State Orchestrator validates it against Main's active partition and dispatches a one-way rebuild to that partition's State actor. |
 
-Rebuild acceptance is not completion. Poll status/list operations to observe results.
+Index rebuild acceptance follows completion of the awaited actor calls, though each Index actor records derived-file faults in status rather than failing the RPC. State rebuild acceptance confirms one-way dispatch, not completion; poll status to observe it.
 
 ## Error Model
 
@@ -173,9 +171,8 @@ Normal command-domain outcomes stay in `ExecuteHandlerResponse`. The implemented
 |---|---|
 | `INVALID_ARGUMENT` | Invalid database path/name, UUID, range/limit/mode/consistency, query keys/items, schema JSON, schema kind, rebuild identity, or required routing values explicitly checked by a service. |
 | `NOT_FOUND` | Database, handler, schema, command ID, or partition not found. |
-| `ALREADY_EXISTS` | Database directory/registry entry already exists. |
+| `ALREADY_EXISTS` | Database directory already exists. |
 | `FAILED_PRECONDITION` | State rebuild requested for the active or future partition; `PrepareDecision` or `CompleteDecision` called while `RemoteDecisions` is absent or invalid. |
-| `RESOURCE_EXHAUSTED` | Follow/subscription live queue overflow. |
 | `UNAVAILABLE` | Database not write-available, writer lock contention, event-store fault, I/O, or access failure. |
 | `DATA_LOSS` | Invalid/corrupt authoritative metadata or partition data. |
 | `INTERNAL` | Sanitized fallback for an unexpected service exception; the original exception is logged server-side. |

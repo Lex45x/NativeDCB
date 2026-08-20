@@ -1,6 +1,6 @@
 # NativeDCB
 
-NativeDCB is an experimental .NET 10 Dynamic Consistency Boundaries event store. It combines an Orleans single-writer decision runtime, a durable JSON/NDJSON event log, a versioned gRPC and gRPC-Web API, NDL and fluent C# decision authoring, optional two-step remote decisions, a native CLI, and a standalone Blazor WebAssembly operator console.
+NativeDCB is an experimental .NET 10 Dynamic Consistency Boundaries event store. It combines an Orleans actor application layer in `NativeDCB.Actors`, a single-writer decision runtime, a durable JSON/NDJSON event log, a versioned gRPC and gRPC-Web API, NDL and fluent C# decision authoring, optional two-step remote decisions, a native CLI, and a standalone Blazor WebAssembly operator console. All 31 RPCs route database work through actors; the ASP.NET Core server maps transport messages and bridges streams.
 
 The implementation is usable but not production complete. Writer startup can recover from a validated cumulative state checkpoint and replay only later partitions, with authoritative full-log recovery when no checkpoint is valid. Decision-model hydration combines derived index snapshots with an authoritative committed tail. The server remains single-silo and has no caller authentication/authorization, audit, or backup facilities. See [Requirements](docs/requirements.md) for an honest status matrix.
 
@@ -69,6 +69,7 @@ dotnet run --project samples\CourseSubscriptions -- remote http://localhost:5010
 ## Documentation
 
 - [Requirements and implementation status](docs/requirements.md)
+- [Implemented actor architecture and persistence ownership](docs/actor-architecture.md)
 - [Solution structure, projects, tests, and sample](docs/solution-structure.md)
 - [Internal engine, actors, NDJSON, state files, and indexes](docs/internal-engine.md)
 - [Database lifecycle and health](docs/database-lifecycle.md)

@@ -1,11 +1,11 @@
 # NativeDCB Solution Structure
 
 Status: implementation reference with future work called out explicitly  
-Last verified: 2026-08-18
+Last verified: 2026-08-19
 
 ## Repository
 
-NativeDCB is a .NET 10 solution (`NativeDCB.slnx`) containing ten source projects, seven test projects, and one sample. Package versions are declared directly in project files; there is no `Directory.Packages.props`. Common nullable, analyzer, deterministic-build, and warnings-as-errors settings are in `Directory.Build.props`. `global.json` selects SDK `10.0.400` with latest-patch roll-forward.
+NativeDCB is a .NET 10 solution (`NativeDCB.slnx`) containing eleven source projects, seven test projects, and one sample. Package versions are declared directly in project files; there is no `Directory.Packages.props`. Common nullable, analyzer, deterministic-build, and warnings-as-errors settings are in `Directory.Build.props`. `global.json` selects SDK `10.0.400` with latest-patch roll-forward.
 
 ```text
 src/
@@ -13,6 +13,7 @@ src/
   NativeDCB.Protocol
   NativeDCB.Ndl
   NativeDCB.Engine
+  NativeDCB.Actors
   NativeDCB.Server
   NativeDCB.Cli
   NativeDCB.Sdk
@@ -53,31 +54,27 @@ Files are grouped physically under `Catalog`, `Databases`, `Events`, `Queries`, 
 
 ### `NativeDCB.Ndl`
 
-The NDL library implements source text and spans, lexing, parsing with recovery diagnostics, syntax records, canonical formatting, compilation to `NativeDCB.Model.DecisionPlan`, and diagnostic-bearing conversion of representable plans back to canonical NDL. It references only `NativeDCB.Model`. Schema-aware semantic validation and execution live in the server, not in this library.
+The NDL library implements source text and spans, lexing, parsing with recovery diagnostics, syntax records, canonical formatting, compilation to `NativeDCB.Model.DecisionPlan`, and diagnostic-bearing conversion of representable plans back to canonical NDL. It references only `NativeDCB.Model`. Schema-aware semantic validation and execution live in `NativeDCB.Actors`, not in this library.
 
 Its physical folders separate `Text`, `Diagnostics`, `Lexing`, `Parsing`, `Syntax`, `Compilation`, and `Formatting`. Syntax expressions and statements are nested beneath `Syntax`.
 
 ### `NativeDCB.Engine`
 
-The engine implements JSON/NDJSON persistence and Orleans grain contracts/implementations for:
+The Orleans-free engine implements JSON/NDJSON event-log storage, partition discovery and reads, checkpoint-assisted recovery with full authoritative fallback, state-file construction/inspection, and manifest/generation index persistence. It references only `NativeDCB.Model`; `NativeDCB.Actors` has internal access to its storage helpers.
 
-- one Main Writer grain per database name
-- one Read grain per database name
-- one State Builder grain per database name
-- one Index Coordinator grain per database and one Index grain per `(event type, key name, key value)` identity
-- partition discovery, checkpoint-assisted recovery with full authoritative fallback, state-file construction/inspection, and derived index persistence
+Storage is grouped into `EventLog`, `Indexes`, and `State`. The engine does not host gRPC, define grains, own catalogs, or execute NDL decisions.
 
-The engine references `NativeDCB.Model` and Orleans. It does not host gRPC or execute NDL decisions.
+### `NativeDCB.Actors`
 
-Actor files are physically separated into `Contracts`, `Messages`, `Mapping`, and `Grains`. Storage is grouped into `EventLog`, `Indexes`, and `State`.
+`NativeDCB.Actors` is the Orleans application layer. It owns actor contracts/messages and implementations for Database Directory, Main Writer, Schema, Handler, Decision, stateless event-log reads, index mutation/replicas/orchestration, State/State Builder/State Orchestrator, subscriptions, and remote-decision routing. It also contains catalog/schema validation, plan execution, HMAC capability handling, actor mapping, and storage-path configuration.
+
+Files are grouped under `Contracts`, `Messages`, `Grains`, `Catalog`, `Decisions`, `Mapping`, and `Storage`. Actor namespaces use the `NativeDCB.Actors.*` root. The actor project references Engine, Model, NDL, and Orleans.
 
 ### `NativeDCB.Server`
 
-The ASP.NET Core server hosts an Orleans localhost cluster, all generated gRPC service implementations, registry/catalog storage, schema validation, the Transaction grain, the NDL/plan runtime, and HMAC protection for optional stateless remote-decision capabilities. It maps protocol messages to model/actor messages and exposes HTTP liveness/readiness endpoints. All six services support native HTTP/2 gRPC and gRPC-Web; cross-origin browser access is restricted by `GrpcWeb:AllowedOrigins`.
+The ASP.NET Core server hosts an Orleans localhost cluster and all generated gRPC service implementations. It maps protocol messages to actor messages, propagates cancellation, maps actor results, bridges streaming responses, and exposes HTTP liveness/readiness endpoints. All 31 RPCs enter actors for database operations. All six services support native HTTP/2 gRPC and gRPC-Web; cross-origin browser access is restricted by `GrpcWeb:AllowedOrigins`.
 
-The Transaction grain is in the server because it executes captured handler plans and depends on server catalog/schema types. See [Internal Engine](internal-engine.md).
-
-Server files are grouped physically by `Grpc`, `Databases`, `Catalog`, and `Decisions`; gRPC infrastructure, schema handling, execution, transactions, and remote-decision token handling use nested folders.
+The server has no Transaction grain, database registry, catalog store, or direct event/index/state storage path. There are no generic public-service facade actors: each gRPC method calls the actor responsible for the operation, and domain actors orchestrate workflows that span owners. See [Actor Architecture](actor-architecture.md).
 
 ### `NativeDCB.Sdk`
 
@@ -113,7 +110,8 @@ The browser gRPC facade is under `Grpc`, descriptor discovery is nested under `G
 ```text
 Ndl -> Model
 Engine -> Model
-Server -> Engine + Model + Ndl + Protocol
+Actors -> Engine + Model + Ndl
+Server -> Actors + Engine + Model + Ndl + Protocol
 Sdk -> Model + Protocol
 Cli -> Model + Protocol + Sdk
 Web -> Protocol
@@ -121,15 +119,17 @@ Web -> Protocol
 Sdk.Analyzers and Sdk.Generators are Roslyn build tools referenced privately for SDK packaging and directly as analyzers by the sample.
 ```
 
-The SDK, CLI, and Web application do not reference Orleans or the engine. Web does not reference the SDK and uses generated protocol clients directly.
+The Server project still has direct project references to Engine, Model, and NDL in addition to Actors and Protocol, although `NativeDCB.Server/Grpc` uses actor contracts/messages and public model mapping rather than Engine storage, catalogs, or decision runtimes. The SDK, CLI, and Web application do not reference Orleans or Engine. Web does not reference the SDK and uses generated protocol clients directly.
 
 ## Runtime Boundaries
 
 The runnable boundaries are:
 
-- `NativeDCB.Server`: owns the local Orleans silo, database registry, files, and gRPC/health endpoints.
+- `NativeDCB.Server`: owns the local Orleans silo and gRPC/health endpoints; hosted actors own database workflows and file mutation.
 - `NativeDCB.Cli`: a short- or long-lived native HTTP/2 gRPC client process.
 - `NativeDCB.Web`: static assets served by the development host or another static host, with application code executing in the browser WebAssembly runtime and calling `NativeDCB.Server` directly over gRPC-Web.
+
+`NativeDCB.Server` remains the executable host, but the actor layer owns database state and file mutation. The server transport layer maps requests to actor messages and does not orchestrate database operations.
 
 There is no Web BFF or proxy boundary. External .NET applications can use `NativeDCB.Sdk`. NDL source and SDK expression trees independently compile to the same `DecisionPlan` model. SDK plans are serialized directly into `RegisterHandlerRequest.plan_json`; they are not translated into NDL.
 

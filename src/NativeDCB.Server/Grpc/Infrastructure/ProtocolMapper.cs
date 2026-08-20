@@ -5,21 +5,13 @@ using Google.Protobuf.WellKnownTypes;
 
 using Grpc.Core;
 
-using NativeDCB.Engine.Actors.Messages;
-using NativeDCB.Engine.Storage.State;
+using NativeDCB.Actors.Messages;
 using NativeDCB.Model.Databases;
 using NativeDCB.Model.Events;
 using NativeDCB.Model.Queries;
-using NativeDCB.Ndl.Diagnostics;
-using NativeDCB.Ndl.Parsing;
-using NativeDCB.Ndl.Text;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Catalog;
-using NativeDCB.Server.Databases;
 
-using DiagnosticSeverity = NativeDCB.Ndl.Diagnostics.DiagnosticSeverity;
 using ProtocolDatabaseInfo = NativeDCB.Protocol.V1.DatabaseInfo;
-using ProtocolDiagnostic = NativeDCB.Protocol.V1.Diagnostic;
 using ProtocolPartitionStatus = NativeDCB.Protocol.V1.PartitionStatus;
 using QueryItem = NativeDCB.Model.Queries.QueryItem;
 
@@ -93,105 +85,64 @@ internal static class ProtocolMapper
         return new EventQuery(items);
     }
 
-    public static ProtocolDatabaseInfo ToDatabaseInfo(DatabaseEntry entry, WriterStateMessage? state = null)
+    public static DatabaseSummary ToDatabaseSummary(DatabaseSummaryMessage value)
+    {
+        DatabaseSummary summary = new()
+        {
+            Database = value.Database,
+            State = ToDatabaseState(value.Status),
+            MainHead = value.MainHead,
+            ReadAvailable = value.ReadAvailable,
+            WriteAvailable = value.WriteAvailable
+        };
+        if (value.Fault is not null)
+        {
+            summary.Fault = DatabaseFault(value.Fault);
+        }
+
+        return summary;
+    }
+
+    public static ProtocolDatabaseInfo ToDatabaseInfo(ActorDatabaseInfoMessage value)
     {
         ProtocolDatabaseInfo info = new()
         {
-            Database = entry.Name,
-            State = ToDatabaseState(entry.Status),
-            DatabaseVersion = "1",
-            FileFormatVersion = "1",
-            MainHead = state?.Head ?? entry.Head,
-            ActivePartitionIndex = checked((uint)(state?.ActivePartition ?? entry.ActivePartition)),
-            WriterLockOwned = entry.IsOpen,
-            ReadAvailable = entry.ReadAvailable,
-            WriteAvailable = entry.WriteAvailable
+            Database = value.Database,
+            State = ToDatabaseState(value.Status),
+            DatabaseVersion = value.DatabaseVersion,
+            FileFormatVersion = value.FileFormatVersion,
+            MainHead = value.MainHead,
+            ActivePartitionIndex = checked((uint)value.ActivePartitionIndex),
+            WriterLockOwned = value.WriterLockOwned,
+            ReadAvailable = value.ReadAvailable,
+            WriteAvailable = value.WriteAvailable
         };
-        if (entry.LastFault is { } fault)
+        info.CatalogFingerprints.AddRange(value.CatalogFingerprints.Select(fingerprint =>
+            Fingerprint(fingerprint.Kind, fingerprint.Name, fingerprint.Fingerprint)));
+        if (value.LastFault is not null)
         {
-            info.LastFault = new ErrorDetail { Code = "DatabaseFaulted", Message = fault };
+            info.LastFault = DatabaseFault(value.LastFault);
         }
 
-        info.CatalogFingerprints.AddRange(
-            entry.Catalog.EventSchemas.Values.Select(x => Fingerprint("event-schema", x.Name, x.Fingerprint)));
-        info.CatalogFingerprints.AddRange(
-            entry.Catalog.CommandSchemas.Values.Select(x => Fingerprint("command-schema", x.Name, x.Fingerprint)));
-        info.CatalogFingerprints.AddRange(
-            entry.Catalog.Handlers.Values.Select(x => Fingerprint("handler", x.Name, x.PlanFingerprint)));
         return info;
     }
 
-    public static HandlerDescription ToHandler(HandlerCatalogEntry value)
+    public static DatabaseHealth ToDatabaseHealth(DatabaseHealthMessage value)
     {
-        return new HandlerDescription
+        DatabaseHealth health = new()
         {
-            HandlerName = value.Name,
-            CommandType = value.CommandType,
-            NdlSource = value.NdlSource,
-            SourceFingerprint = value.SourceFingerprint,
-            PlanFingerprint = value.PlanFingerprint,
-            Valid = true
+            Database = value.Database,
+            State = ToDatabaseState(value.Status),
+            Live = value.Live,
+            ReadReady = value.ReadReady,
+            WriteReady = value.WriteReady
         };
-    }
-
-    public static SchemaDescription ToSchema(SchemaCatalogEntry value, SchemaKind kind)
-    {
-        return new SchemaDescription
+        if (value.Fault is not null)
         {
-            SchemaName = value.Name,
-            SchemaKind = kind,
-            Fingerprint = value.Fingerprint,
-            SchemaDocumentJson = ByteString.CopyFromUtf8(value.DocumentJson)
-        };
-    }
+            health.Fault = DatabaseFault(value.Fault);
+        }
 
-    public static SchemaSummary ToSchemaSummary(SchemaCatalogEntry value, SchemaKind kind)
-    {
-        return new SchemaSummary { SchemaName = value.Name, SchemaKind = kind, Fingerprint = value.Fingerprint };
-    }
-
-    public static HandlerSummary ToHandlerSummary(HandlerCatalogEntry value)
-    {
-        return new HandlerSummary
-        {
-            HandlerName = value.Name,
-            CommandType = value.CommandType,
-            SourceFingerprint = value.SourceFingerprint,
-            PlanFingerprint = value.PlanFingerprint,
-            Valid = true
-        };
-    }
-
-    public static ProtocolDiagnostic ToDiagnostic(NdlDiagnostic value, SourceText source)
-    {
-        LinePosition start = source.GetLinePosition(value.Span.Start);
-        LinePosition end = source.GetLinePosition(value.Span.End);
-        return new ProtocolDiagnostic
-        {
-            Code = value.Code,
-            Severity = value.Severity == DiagnosticSeverity.Error
-                ? Protocol.V1.DiagnosticSeverity.Error
-                : Protocol.V1.DiagnosticSeverity.Warning,
-            Message = value.Message,
-            SourceSpan = new SourceSpan
-            {
-                Start = Position(start, value.Span.Start), End = Position(end, value.Span.End)
-            }
-        };
-    }
-
-    public static PlanSummary ToPlan(ParseResult parsed)
-    {
-        PlanSummary plan = new()
-        {
-            PlanFingerprint = DatabaseRegistry.Fingerprint(Ndl.Ndl.Format(parsed.Document)),
-            RedactedSummary = $"{parsed.Document.Decisions.Count} decision(s)"
-        };
-        plan.Operations.AddRange(parsed.Document.Decisions.SelectMany(x => new[]
-        {
-            $"decision:{x.Name}", $"include:{x.Includes.Count}", $"emit:{x.Decide.Emissions.Count}"
-        }));
-        return plan;
+        return health;
     }
 
     public static RpcException InvalidArgument(string message)
@@ -281,7 +232,7 @@ internal static class ProtocolMapper
         };
     }
 
-    public static StateFileStatus ToStateFileStatus(StateFileInspection value)
+    public static StateFileStatus ToStateFileStatus(StateFileStatusMessage value)
     {
         return new StateFileStatus
         {
@@ -302,7 +253,7 @@ internal static class ProtocolMapper
         IndexStatus result = new()
         {
             EventType = value.EventType,
-            Filename = Path.GetFileName(value.FilePath),
+            Filename = value.FilePath.Replace(Path.DirectorySeparatorChar, '/'),
             IndexHead = value.IndexHead,
             MainHead = value.MainHead,
             Lag = checked((ulong)Math.Max(val1: 0, value.MainHead - value.IndexHead)),
@@ -329,6 +280,11 @@ internal static class ProtocolMapper
         return new CatalogFingerprint { Kind = kind, Name = name, Fingerprint = value };
     }
 
+    private static ErrorDetail DatabaseFault(string message)
+    {
+        return new ErrorDetail { Code = "DatabaseFaulted", Message = message };
+    }
+
     public static DatabaseState ToDatabaseState(DatabaseStatus value)
     {
         return value switch
@@ -344,13 +300,4 @@ internal static class ProtocolMapper
         };
     }
 
-    private static SourcePosition Position(LinePosition value, int offset)
-    {
-        return new SourcePosition
-        {
-            Line = checked((uint)(value.Line + 1)),
-            Column = checked((uint)(value.Character + 1)),
-            Offset = checked((uint)offset)
-        };
-    }
 }

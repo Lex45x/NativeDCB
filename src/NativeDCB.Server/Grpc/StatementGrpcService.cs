@@ -1,56 +1,42 @@
-using System.Text.Json;
-
 using Grpc.Core;
 
-using NativeDCB.Model.Decisions;
-using NativeDCB.Ndl.Compilation;
-using NativeDCB.Ndl.Parsing;
-using NativeDCB.Ndl.Syntax;
+using NativeDCB.Actors.Contracts;
+using NativeDCB.Actors.Messages;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Catalog;
-using NativeDCB.Server.Catalog.Schemas;
-using NativeDCB.Server.Databases;
-using NativeDCB.Server.Decisions.Execution;
+using NativeDCB.Server.Decisions.Transactions;
 using NativeDCB.Server.Grpc.Infrastructure;
 
-using DiagnosticSeverity = NativeDCB.Protocol.V1.DiagnosticSeverity;
-using QueryItem = NativeDCB.Protocol.V1.QueryItem;
+using ProtocolDiagnosticSeverity = NativeDCB.Protocol.V1.DiagnosticSeverity;
+using ProtocolQueryItem = NativeDCB.Protocol.V1.QueryItem;
 
 namespace NativeDCB.Server.Grpc;
 
-public sealed class StatementGrpcService(DatabaseRegistry registry) : StatementService.StatementServiceBase
+public sealed class StatementGrpcService(IGrainFactory grains) : StatementService.StatementServiceBase
 {
     public override async Task<ExplainStatementResponse> ExplainStatement(
         ExplainStatementRequest request,
         ServerCallContext context)
     {
-        DatabaseEntry database = await EnsureDatabaseAsync(
-            request.Database, context.CancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        Dictionary<string, RegisteredJsonSchema> eventSchemas = ParseEventSchemas(database);
-        ParseResult parsed = Ndl.Ndl.Parse(request.NdlSource);
-        ExplainStatementResponse response = new() { Valid = !parsed.HasErrors };
-        response.Diagnostics.AddRange(parsed.Diagnostics.Select(value =>
-            ProtocolMapper.ToDiagnostic(value, parsed.Source)));
-        if (!parsed.HasErrors)
-        {
-            foreach (string error in NdlDecisionRuntime.ValidateDecision(parsed, eventSchemas: eventSchemas))
-            {
-                response.Diagnostics.Add(ErrorDiagnostic(error));
-            }
+        NdlValidationResultMessage result = await CallAsync(
+                token => grains.GetGrain<IHandlerGrain>(request.Database).ValidateNdlAsync(
+                    new ValidateNdlMessage(request.NdlSource, []), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        ThrowIfError(result.Error);
 
-            response.Valid = response.Diagnostics.All(value =>
-                value.Severity != DiagnosticSeverity.Error);
-            if (response.Valid)
+        ExplainStatementResponse response = new() { Valid = result.Valid };
+        response.Diagnostics.AddRange(result.Diagnostics.Select(ToDiagnostic));
+        if (result.Plan is not null)
+        {
+            response.Plan = new PlanSummary
             {
-                response.Plan = ProtocolMapper.ToPlan(parsed);
-                CompilationResult compilation = Ndl.Ndl.Compile(request.NdlSource);
-                foreach (DecisionPlan plan in compilation.Plans)
-                {
-                    response.QueryTemplates.Add(ToQueryTemplate(plan, eventSchemas));
-                }
-            }
+                PlanFingerprint = result.Plan.Fingerprint,
+                RedactedSummary = result.Plan.RedactedSummary
+            };
+            response.Plan.Operations.AddRange(result.Plan.Operations);
         }
 
+        response.QueryTemplates.AddRange((result.QueryTemplates ?? []).Select(ToQuery));
         return response;
     }
 
@@ -59,66 +45,39 @@ public sealed class StatementGrpcService(DatabaseRegistry registry) : StatementS
         IServerStreamWriter<StatementResult> responseStream,
         ServerCallContext context)
     {
-        ExplainStatementResponse explained = await ExplainStatement(
-                new ExplainStatementRequest { Database = request.Database, NdlSource = request.NdlSource }, context)
+        PublishStatementResultMessage result = await CallAsync(
+                token => grains.GetGrain<IHandlerGrain>(request.Database).PublishStatementAsync(
+                    new PublishStatementMessage(request.NdlSource), token),
+                context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        if (explained.Diagnostics.Count > 0)
+        ThrowIfError(result.Error);
+
+        if (result.Diagnostics.Length > 0)
         {
             DiagnosticBatch batch = new();
-            batch.Diagnostics.AddRange(explained.Diagnostics);
-            await responseStream
-                .WriteAsync(new StatementResult { StatementIndex = 0, Diagnostics = batch }, context.CancellationToken)
+            batch.Diagnostics.AddRange(result.Diagnostics.Select(ToDiagnostic));
+            await responseStream.WriteAsync(
+                    new StatementResult { StatementIndex = 0, Diagnostics = batch },
+                    context.CancellationToken)
                 .ConfigureAwait(continueOnCapturedContext: false);
         }
 
-        if (!explained.Valid)
+        if (!result.Valid)
         {
             await WriteCompletionAsync(
-                    responseStream, statementIndex: 0, succeeded: false, "Statement validation failed.",
+                    responseStream,
+                    statementIndex: 0,
+                    succeeded: false,
+                    "Statement validation failed.",
                     context.CancellationToken)
                 .ConfigureAwait(continueOnCapturedContext: false);
             return;
         }
 
-        DatabaseEntry database = await EnsureDatabaseAsync(
-            request.Database, context.CancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        if (!database.WriteAvailable)
+        for (int index = 0; index < result.Registrations.Length; index++)
         {
-            throw ProtocolMapper.Unavailable(
-                $"Database '{database.Name}' is not accepting statements while in state '{database.Status}'.");
-        }
-
-        ParseResult parsed = Ndl.Ndl.Parse(request.NdlSource);
-        CompilationResult compilation = Ndl.Ndl.Compile(request.NdlSource);
-        Dictionary<string, string> schemaFingerprints = database.Catalog.EventSchemas.Values
-            .Concat(database.Catalog.CommandSchemas.Values)
-            .ToDictionary(schema => schema.Name, schema => schema.Fingerprint, StringComparer.Ordinal);
-        List<HandlerCatalogEntry> registrations = new(compilation.Plans.Count);
-        foreach (DecisionPlan sourcePlan in compilation.Plans)
-        {
-            DecisionPlan plan = sourcePlan with
-            {
-                Fingerprints = sourcePlan.Fingerprints with { SchemaFingerprints = schemaFingerprints }
-            };
-            string planJson = JsonSerializer.Serialize(plan, DatabaseRegistry.JsonOptions);
-            DecisionSyntax decision = parsed.Document.Decisions.Single(value => value.Name == plan.Name);
-            string singleSource = Ndl.Ndl.Format(new DocumentSyntax([decision], decision.Span));
-            registrations.Add(new HandlerCatalogEntry(
-                plan.Name,
-                plan.CommandSchema,
-                singleSource,
-                DatabaseRegistry.Fingerprint(singleSource),
-                DatabaseRegistry.Fingerprint(planJson),
-                planJson));
-        }
-
-        await PublishRegistrationsAsync(database, registrations, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        for (int index = 0; index < registrations.Count; index++)
-        {
-            HandlerCatalogEntry registration = registrations[index];
-            await responseStream
-                .WriteAsync(
+            HandlerSummaryMessage registration = result.Registrations[index];
+            await responseStream.WriteAsync(
                     new StatementResult
                     {
                         StatementIndex = checked((uint)index),
@@ -129,80 +88,72 @@ public sealed class StatementGrpcService(DatabaseRegistry registry) : StatementS
                             SourceFingerprint = registration.SourceFingerprint,
                             PlanFingerprint = registration.PlanFingerprint
                         }
-                    }, context.CancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                    },
+                    context.CancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
         }
 
         await WriteCompletionAsync(
-            responseStream,
-            checked((uint)registrations.Count),
-            succeeded: true,
-            $"Registered {registrations.Count} handler(s).",
-            context.CancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+                responseStream,
+                checked((uint)result.Registrations.Length),
+                succeeded: true,
+                $"Registered {result.Registrations.Length} handler(s).",
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    private static async Task PublishRegistrationsAsync(
-        DatabaseEntry database,
-        IReadOnlyList<HandlerCatalogEntry> registrations,
-        CancellationToken cancellationToken)
-    {
-        await database.CatalogLock.WaitAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        Dictionary<string, HandlerCatalogEntry?> previous = new(StringComparer.Ordinal);
-        try
-        {
-            foreach (HandlerCatalogEntry registration in registrations)
-            {
-                previous[registration.Name] = database.Catalog.Handlers.TryGetValue(
-                    registration.Name, out HandlerCatalogEntry? existing)
-                    ? existing
-                    : null;
-                database.Catalog.Handlers[registration.Name] = registration;
-            }
-
-            try
-            {
-                await database.SaveCatalogAsync(cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            }
-            catch
-            {
-                foreach ((string name, HandlerCatalogEntry? existing) in previous)
-                {
-                    if (existing is null)
-                    {
-                        database.Catalog.Handlers.TryRemove(name, out _);
-                    }
-                    else
-                    {
-                        database.Catalog.Handlers[name] = existing;
-                    }
-                }
-
-                throw;
-            }
-        }
-        finally
-        {
-            database.CatalogLock.Release();
-        }
-    }
-
-    private static Query ToQueryTemplate(
-        DecisionPlan decision,
-        IReadOnlyDictionary<string, RegisteredJsonSchema> eventSchemas)
+    private static Query ToQuery(EventQueryMessage value)
     {
         Query query = new();
-        foreach (PlanInclude include in decision.Includes)
+        foreach (QueryItemMessage actorItem in value.Items)
         {
-            QueryItem item = new();
-            item.EventTypes.Add(include.EventType);
-            eventSchemas.TryGetValue(include.EventType, out RegisteredJsonSchema? schema);
-            item.Keys.AddRange(include.KeyBindings.Select(binding => new KeyValue
+            ProtocolQueryItem item = new();
+            item.EventTypes.Add(actorItem.EventTypes);
+            item.Keys.AddRange(actorItem.Keys.Select(key => new KeyValue
             {
-                Key = schema?.ResolveKeyName(binding.PropertyName) ?? binding.PropertyName, Value = "$command"
+                Key = key.Name,
+                Value = key.Value
             }));
             query.Items.Add(item);
         }
 
         return query;
+    }
+
+    private static Diagnostic ToDiagnostic(ActorDiagnosticMessage value)
+    {
+        Diagnostic result = new()
+        {
+            Code = value.Code,
+            Severity = value.Severity switch
+            {
+                ActorDiagnosticSeverity.Info => ProtocolDiagnosticSeverity.Info,
+                ActorDiagnosticSeverity.Warning => ProtocolDiagnosticSeverity.Warning,
+                ActorDiagnosticSeverity.Error => ProtocolDiagnosticSeverity.Error,
+                _ => ProtocolDiagnosticSeverity.Unspecified
+            },
+            Message = value.Message
+        };
+        if (value.SourceSpan is not null)
+        {
+            result.SourceSpan = new SourceSpan
+            {
+                Start = ToPosition(value.SourceSpan.Start),
+                End = ToPosition(value.SourceSpan.End)
+            };
+        }
+
+        return result;
+    }
+
+    private static SourcePosition ToPosition(ActorSourcePositionMessage value)
+    {
+        return new SourcePosition
+        {
+            Line = checked(value.Line + 1),
+            Column = checked(value.Column + 1),
+            Offset = value.Offset
+        };
     }
 
     private static Task WriteCompletionAsync(
@@ -217,35 +168,45 @@ public sealed class StatementGrpcService(DatabaseRegistry registry) : StatementS
             {
                 StatementIndex = statementIndex,
                 Completion = new StatementCompletion { Succeeded = succeeded, Summary = summary }
-            }, cancellationToken);
+            },
+            cancellationToken);
     }
 
-    private async Task<DatabaseEntry> EnsureDatabaseAsync(string name, CancellationToken cancellationToken)
+    private static async Task<T> CallAsync<T>(
+        Func<GrainCancellationToken, Task<T>> call,
+        CancellationToken cancellationToken)
     {
         try
         {
-            return await registry.GetAsync(name, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            return await GrainCall.RunAsync(call, cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (exception is not RpcException and not OperationCanceledException)
         {
-            throw ProtocolMapper.InvalidArgument(exception.Message);
-        }
-        catch (KeyNotFoundException exception)
-        {
-            throw ProtocolMapper.NotFound(exception.Message);
+            Exception root = exception.GetBaseException();
+            throw root switch
+            {
+                ArgumentException => ProtocolMapper.InvalidArgument(root.Message),
+                DirectoryNotFoundException => ProtocolMapper.NotFound(root.Message),
+                InvalidDataException => ProtocolMapper.DataLoss(root.Message),
+                IOException => ProtocolMapper.Unavailable(root.Message),
+                UnauthorizedAccessException => ProtocolMapper.Unavailable(root.Message),
+                _ => exception
+            };
         }
     }
 
-    private static Dictionary<string, RegisteredJsonSchema> ParseEventSchemas(DatabaseEntry database)
+    private static void ThrowIfError(CatalogErrorMessage? error)
     {
-        return database.Catalog.EventSchemas.Values.ToDictionary(
-            schema => schema.Name,
-            schema => RegisteredJsonSchema.Parse(schema.Name, schema.DocumentJson, eventSchema: true),
-            StringComparer.Ordinal);
-    }
+        if (error is null || error.Kind == CatalogErrorKind.None)
+        {
+            return;
+        }
 
-    private static Diagnostic ErrorDiagnostic(string message)
-    {
-        return new Diagnostic { Code = "NDL2001", Severity = DiagnosticSeverity.Error, Message = message };
+        throw error.Kind switch
+        {
+            CatalogErrorKind.InvalidArgument => ProtocolMapper.InvalidArgument(error.Message),
+            _ => ProtocolMapper.Internal(error.Message)
+        };
     }
 }

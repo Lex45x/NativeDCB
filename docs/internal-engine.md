@@ -1,54 +1,74 @@
 # NativeDCB Internal Engine
 
 Status: current implementation reference  
-Last verified: 2026-08-18
+Last verified: 2026-08-19
+
+NativeDCB runs one Orleans localhost silo. `NativeDCB.Actors` owns application orchestration and file mutation; `NativeDCB.Engine` contains Orleans-free event-log, index, and state storage primitives. All public database operations enter actors before reaching Engine storage.
 
 ## Correctness Model
 
-NativeDCB currently runs one Orleans localhost silo. A database name is the string grain key for its Main Writer, Read, State Builder, and Index Coordinator grains. The Main Writer is the only actor path that appends events. `JsonEventStore` adds an in-process semaphore and an OS-exclusive `store.lock`, so one process/store instance performs append validation, serialization, durable flush, and state promotion at a time.
+The database-keyed `MainWriterGrain` is the only actor path that owns a writable `JsonEventStore`. Orleans non-reentrant turns serialize Main calls. `JsonEventStore` has no in-process semaphore or gate; the OS-exclusive `store.lock` prevents a second process from opening the same database for writing.
 
-A decision uses **read snapshot, single writer** semantics:
+A local decision uses **read snapshot, single writer** semantics:
 
-1. The Transaction grain asks the Main Writer for the committed head.
-2. It reads matching committed events through that head from the Read grain.
-3. It evaluates outside the writer.
-4. It sends candidate events, the same query, and the observed head to the Main Writer.
-5. Under serialized write ownership, the store checks for any later matching event before appending.
-6. A conflict causes the Transaction grain to rebuild and retry.
+1. The command-keyed `DecisionGrain` captures Handler and Schema snapshots.
+2. It builds the command-derived query and asks `IndexOrchestratorGrain.ReadAuthoritativeAsync` for one `{ObservedHead, Events}` result.
+3. Index Orchestrator obtains Main's committed head, reads relevant immutable index generations through stateless replicas, and fills the authoritative reader tail from the minimum effective index head through Main's head. Unsupported or missing indexes cause a full bounded partition scan.
+4. Decision evaluates outside Main and sends candidate events, the same query, and the observed head to Main.
+5. Main checks command reconciliation and later matching events before appending and durably flushing the batch.
+6. A conflict causes Decision to discard the model and retry with the Handler and Schema snapshots captured for that invocation.
 
-The observed head bounds the read even if that head event does not match the query. Pending or incomplete records are not visible. This preserves DCB correctness without making derived indexes authoritative.
+The observed head bounds the read even if that head event does not match the query. Pending or incomplete records are not visible. Derived indexes can increase or reduce read work but are never append authority.
 
-Remote decisions split this lifecycle at the same boundary. `PrepareDecision` builds the command-derived query, captures the writer head, hydrates and serializes the structural model, then returns a signed, expiring context containing the query and observed head. `CompleteDecision` validates that context and attempts exactly one conditional append of client-proposed events. A later matching event returns `stale`; unrelated events after the observed head do not. Unlike the Transaction grain, completion does not rebuild the model or retry.
+Remote preparation uses the same actor hydration path and returns a signed, expiring capability containing the query and observed head. Remote completion is routed to the same command-keyed Decision actor and attempts exactly one conditional append. A later matching event returns `stale`; unrelated events after the observed head do not. Completion does not rebuild or retry.
 
 ## Orleans Roles
 
-### Main Writer grain
+### Main Writer
 
-`IMainWriterGrain`, keyed by database name, exposes writer state and conditional append. It delegates durable storage to the registry-owned `JsonEventStore`, validates candidate batches against the current catalog, publishes committed batches to the Index Coordinator, and notifies the State Builder when partitions close.
+`IMainWriterGrain`, keyed by database, lazily creates or opens its own `JsonEventStore`, reports lifecycle state, and performs conditional append. It owns `database_v1.json`, `store.lock`, and all event partitions. Candidate schema validation and decision evaluation occur before Main; Main enforces storage-level batch, key, command, and append-condition invariants.
 
-The grain does not run reducers. Orleans default grain serialization and the store semaphore prevent overlapping appends in the current single-silo process.
+After a committed append, Main derives affected logical index identities directly from event type and keys and dispatches one-way `IIndexGrain.AdvanceAsync` calls. Index actors catch and record derived-file I/O/JSON faults, so those faults do not change the already durable append outcome. Whenever the active partition is greater than one, Main then dispatches `IStateBuilderGrain.BuildMissingAsync`; that state-builder contract is also one-way and may reuse already equivalent files. Opening writer state repeats the state-builder dispatch so a missed post-commit notification is repaired.
 
-### Transaction grain
+### Decision
 
-`ITransactionGrain` is implemented in the server and keyed as `{database}|{command UUID}`. It captures the handler source, compiled plan, schema documents, fingerprints, and command JSON in the request. It checks command-ID reconciliation, validates an optional command schema, executes the plan, and retries append conflicts until cancellation or a terminal result.
+`IDecisionGrain` is keyed as `{database}|{command UUID}` and owns local execution, remote preparation, and remote completion. It reconciles committed commands through the stateless Read actor, obtains immutable Handler and Schema messages, validates command input, executes the plan, and calls Main. Local append conflicts retry until cancellation or a terminal result.
 
-The grain has no Orleans-persisted state. Its captured request makes handler replacement/removal irrelevant to that invocation.
+The stateless `IRemoteDecisionRouterGrain` verifies an HMAC capability before extracting the command identity and routing completion. No preparation continuation is stored in a grain or file.
 
-Remote preparation/completion does not use the Transaction grain and creates no grain or server-side continuation state. The HMAC-protected capability carries command identity/hash, plan/catalog, query, head, expiry, and store identity needed for completion. Handler or relevant schema changes invalidate an uncommitted capability; an already committed command is reconciled first.
+### Schema And Handler
 
-### Read grain
+`ISchemaGrain` and `IHandlerGrain` are each keyed by database and own `schemas_v1.json` and `handlers_v1.json`, respectively. Their ordinary in-memory documents are serialized by Orleans turns. Mutations write a uniquely named temporary file with write-through/durable flush and atomically move it over the owned file.
 
-`IReadGrain`, keyed by database, serves partition status, range, query, and command-ID reads. It uses `PartitionEventReader`, which opens metadata/partition files for shared reading and reconstructs committed events. Finite public reads use this partition path without opening an unopened store; an open store supplies the Main Writer's promoted head as their boundary. Local transaction and remote model hydration first ask the Index Coordinator for a snapshot and its minimum index head, then use this grain to complete the committed tail through the captured writer head. Results are deduplicated and ordered by event ID, so indexes remain non-authoritative.
+Schema maintains command/event registrations, versions, fingerprints, compatibility checks, and consistency-key metadata. Handler asks Schema for immutable snapshots when validating NDL or plans, stores compiled plans and fingerprints, and atomically publishes multi-decision statements in one handler-file replacement.
 
-### State Builder grain
+### Read
 
-`IStateBuilderGrain`, keyed by database, receives one-way build/rebuild requests. It builds every missing closed-partition state file up to the active partition. Each build restores the newest earlier checkpoint that passes the same metadata, snapshot, and source-partition validation used at writer startup, then replays only the missing closed partitions. If no earlier checkpoint is valid, it rebuilds from the authoritative partition prefix.
+`IReadGrain`, keyed by database and implemented as a stateless worker, uses `PartitionEventReader` for shared read-only access. It captures committed boundaries directly from metadata and partition files and never acquires `store.lock`, mutates files, or depends on a registry-owned store.
 
-### Index Coordinator and Index grains
+Bounded methods accept an explicit event-ID boundary. Snapshot methods return the partition-recovered boundary together with events. Index advancement/rebuild, finite public reads, command reconciliation, and subscription polling use these contracts. Authoritative Index Orchestrator reads separately obtain Main's promoted head and use Read only through that boundary.
 
-The coordinator discovers valid index JSON files and tracks logical index identities. A committed event creates identities for every `(event type, key name, key value)` on the event. Each corresponding Index grain receives committed notifications, stores full matching immutable events, advances its observed global head, and persists its file.
+### Index Actors
 
-The coordinator can answer keyed eventual queries by intersecting key buckets per event type and unioning query items. A query item without both event type and key is not index-supported and falls back to a committed partition scan at the gRPC layer.
+There is no Index Coordinator. An encoded logical identity is derived directly from database, event type, key name, and key value wherever it is needed.
+
+- `IIndexGrain` is the single mutator for one logical identity. It advances or rebuilds from bounded Read results, creates a write-once generation, and atomically publishes it through `manifest_v1.json`.
+- `IIndexReplicaGrain` is a stateless worker that reads the manifest and referenced generation and returns an immutable snapshot.
+- `IIndexOrchestratorGrain` is a stateless worker that derives identities, reads replicas in parallel, intersects key indexes within an item, unions event types/items, completes authoritative tails, and handles index listing/rebuild administration.
+
+### State Actors
+
+`IStateGrain`, keyed by database plus partition, owns one `state_{partition}_v1.json`. It inspects through Engine `StateFileInspector` and builds by constructing Engine `StateBuilder` directly. `StateBuilder` opens metadata, prior checkpoints, and authoritative partition files itself; State does not obtain event data through `IReadGrain`.
+
+`IStateBuilderGrain`, keyed by database, receives one-way build-missing notifications after commits when a closed partition exists and sequentially asks each closed-partition State actor to build or reuse its file. `IStateOrchestratorGrain`, also database-keyed, combines Main's active partition, Read partition status, and per-partition State inspection or one-way explicit rebuild dispatch.
+
+Main startup checkpoint recovery remains an Engine operation inside `JsonEventStore.OpenAsync`: it reads state files directly and does not ask State actors for snapshot messages.
+
+### Database Directory And Subscriptions
+
+The singleton `IDatabaseDirectoryGrain` validates names, enumerates database directories, creates through Main, aggregates Main/Schema/Handler status, and reports capabilities and health. There is no `DatabaseRegistry` or mutable process-local database-entry collection.
+
+Each `IEventSubscriptionGrain` has a unique ID and retains only an in-memory cursor, filters, limit, and delivered count. It polls Read snapshots for range follow or authoritative Index Orchestrator snapshots for query subscriptions, in batches of at most 256. It does not consume `JsonEventStore` callbacks, an Orleans stream, or a bounded live queue. gRPC repeatedly calls `ReadNextAsync` and writes returned events.
 
 ## Durable Directory
 
@@ -56,18 +76,22 @@ The coordinator can answer keyed eventual queries by intersecting key buckets pe
 {database}/
   database_v1.json
   store.lock
-  catalog_v1.json
+  schemas_v1.json
+  handlers_v1.json
   store_partition_000001_v1.json
   store_partition_000002_v1.json
   state_000001_v1.json
-  index_{eventHash16}_{keyHash16}_v1.json
+  indexes/
+    {logical-index-id}/
+      manifest_v1.json
+      generation_00000000000000000042_{unique}_v1.json
 ```
 
-`database_v1.json` is normal compact JSON with `formatVersion`, a store UUID, and `createdUtc`. `catalog_v1.json` is indented JSON with current event schemas, command schemas, and handler descriptions/plans. The catalog is server-owned rather than part of the append log.
+The current logical-index directory is `index_{eventHash16}_{keyHash16}`. The generation head is 20 decimal digits and the unique component is a GUID without separators. The pre-refactor `catalog_v1.json` and mutable root `index_*.json` formats are unsupported historical development formats; there is no migration or fallback.
 
 ## Partition Identity And NDJSON
 
-Partition filenames are contiguous, one-based, six-digit numbers. Recovery orders by parsed filename and rejects gaps. The highest partition is active; all preceding partitions are treated as closed.
+Partition filenames are contiguous, one-based, six-digit numbers. Recovery orders by parsed filename and rejects gaps. The highest partition is active; all preceding partitions are closed.
 
 Every partition is NDJSON. The first line is an identity record:
 
@@ -75,88 +99,53 @@ Every partition is NDJSON. The first line is an identity record:
 {"kind":"partition","formatVersion":1,"storeId":"...","partitionNumber":1}
 ```
 
-Recovery requires the header's store UUID, format, and number to match database metadata and the filename-derived number. This prevents a partition copied from another database from being accepted.
-
-An event line contains:
-
-```json
-{
-  "kind":"event",
-  "eventId":42,
-  "batchId":"...",
-  "batchIndex":0,
-  "batchCount":2,
-  "type":"StudentSubscribedToCourse",
-  "schemaVersion":1,
-  "keys":[{"name":"student","value":"s1"},{"name":"course","value":"c1"}],
-  "data":{},
-  "timestampUtc":"2026-08-14T12:00:00+00:00",
-  "commandId":"...",
-  "commandType":"SubscribeStudentToCourse"
-}
-```
-
-The final line for a batch is:
+Recovery requires the header's store UUID, format, and number to match database metadata and the filename-derived number. An event record carries event/batch position, type, schema version, keys, payload, timestamp, command ID, and command type. The final line for a batch is a commit record:
 
 ```json
 {"kind":"commit","batchId":"...","batchCount":2,"firstEventId":42,"lastEventId":43}
 ```
 
-Records use camel-case `System.Text.Json`, UTF-8, and one JSON value followed by `\n`. Event IDs in a batch are consecutive. A batch is recovered only after a matching commit record; all metadata, indexes, counts, IDs, keys, command identity, and ordering are validated.
+Records use camel-case `System.Text.Json`, UTF-8, and one JSON value followed by `\n`. Event IDs in a batch are consecutive. Recovery exposes a batch only after a matching commit record and validates metadata, counts, IDs, keys, command identity, and ordering.
 
-## Append And Partition Rollover
+## Append And Rollover
 
 `MaxEventCountPerPartition` defaults to 10,000 and must be positive. Commit/header records do not count. Before append, a non-empty active partition rolls if the full batch would exceed the limit. A batch is never split. A batch larger than the limit occupies one partition and causes a new empty active partition after commit. Reaching the limit exactly also rolls after commit.
 
-One append currently builds one in-memory byte buffer, writes its event records and commit marker, calls asynchronous flush and `Flush(flushToDisk: true)`, then promotes the in-memory head/events/command map and publishes notifications. There is no multi-command flush group, timer, pending-byte threshold, or explicit pending reservation table. Those remain future optimizations.
+One append builds one in-memory byte buffer, writes event records and the commit marker, calls asynchronous flush and `Flush(flushToDisk: true)`, then promotes the in-memory head/events/command map. There is no multi-command flush group, timer, pending-byte threshold, explicit reservation table, or store-local append gate.
 
-If append/flush throws, the store marks itself faulted because durability may be uncertain. If post-commit rollover fails, the committed result remains valid but future writes are faulted.
+If append/flush throws, the store faults because durability may be uncertain. If post-commit rollover fails, the committed result remains valid but future writes are faulted.
 
-## Recovery
+## Recovery And Reads
 
-Opening a store acquires `store.lock`, validates metadata and the contiguous partition inventory, then considers `state_*_v1.json` files from newest to oldest. A candidate is accepted only when its format/store/boundary metadata and fixed fingerprints match, its full event snapshot matches its SHA-256 fingerprint and internal event/command invariants, and every covered closed partition still has the recorded length and SHA-256 content fingerprint. Recovery seeds the in-memory events, command-ID map, head, and covered partition statuses from the newest valid checkpoint, then replays only the remaining partitions.
+Opening Main acquires `store.lock`, validates metadata and the contiguous partition inventory, then considers `state_*_v1.json` files from newest to oldest. A checkpoint is accepted only when format/store/boundary metadata and fixed fingerprints match, its full event snapshot and command invariants validate, and every covered closed partition still has the recorded length and SHA-256 fingerprint. Recovery seeds from the newest valid checkpoint and replays remaining partitions, or replays from partition 1 when none validates.
 
-Malformed JSON, mismatched content, validation failures, and candidate I/O failures are ignored because state files are derived data. If no candidate validates, `JsonEventStore` performs the full authoritative replay from partition 1. Later-partition corruption remains data loss; a checkpoint never makes invalid authoritative tail data acceptable.
+Closed partitions must contain only complete records/batches. The active partition may end with a complete uncommitted batch or truncated JSON object. Writer recovery ignores and truncates only that proven suffix. Unknown records, malformed committed JSON, bad headers, inconsistent batches, duplicate command IDs, or invalid ordering are data loss.
 
-Closed partitions must contain only complete records/batches. The active partition may have a final complete-but-uncommitted batch or truncated JSON object. Recovery ignores and truncates only that proven suffix to the byte after the last valid commit. Unknown records, malformed committed JSON, bad headers, inconsistent batches, duplicate command IDs, or invalid ordering stop recovery as data loss.
-
-Partition-backed reads tolerate an incomplete active suffix without trimming it and can open files shared for read while a writer owns the database. Finite EventService snapshot/query/type-and-key reads and CommandService command-ID reads recover a committed head this way when the store is unopened/discovered/recovering, without acquiring `store.lock`; when already open, they are bounded by the Main Writer's promoted head. Follow/subscription and mutations still require opening the store. This shared-reader path is not a formal guarantee of truly concurrent in-process read and writer recovery; see [Database Lifecycle](database-lifecycle.md).
+Partition-backed Read actors tolerate an incomplete active suffix without trimming it. They open files shared for reading and recover a committed boundary without opening Main. This is not a formal synchronization guarantee for reads racing writer activation/recovery.
 
 ## State Files
 
-`state_{partition:000000}_v1.json` is a cumulative derived snapshot through a closed partition. It includes:
+`state_{partition:000000}_v1.json` is a cumulative derived snapshot through a closed partition. It includes the complete `SequencedEvent` snapshot, known IDs, command summaries, latest IDs per logical key, source partition checkpoints with length/content hashes, an event-snapshot hash, and fixed event/key/state schema fingerprints.
 
-- format, store UUID, source partition, head, and committed event count
-- the complete cumulative immutable `SequencedEvent` snapshot
-- all known event IDs
-- command IDs with first/last IDs and counts
-- latest event ID per `(event type, key name, key value)`
-- partition checkpoints with boundaries, event counts, lengths, and lowercase SHA-256 content fingerprints
-- a lowercase SHA-256 fingerprint of the serialized event snapshot
-- fixed event-schema and key-encoding fingerprints plus state-schema fingerprint `native-dcb-main-writer-state-v2`
+Engine `StateBuilder` holds shared handles on source partitions, may restore the newest valid earlier checkpoint, replays the remaining prefix, hashes each source, writes through an exclusive write-through handle, flushes, and deserializes for boundary validation. An equivalent existing target file is reused; a malformed or non-equivalent target is deleted and rebuilt. Writer startup applies stricter checkpoint validation, including source hashes and event/command coherence.
 
-The builder holds shared read handles on all source partitions, replays the authoritative prefix, hashes each source, and writes the cumulative snapshot through an exclusive write-through handle. It flushes and deserializes the file for boundary validation before release. Existing JSON files with equivalent boundary metadata/schema identity are reused; malformed or non-equivalent files are deleted and rebuilt. This reuse check is less strict than startup validation. `StateFileInspector` reports presence, lock/read failure, JSON validity, metadata/schema identity and event-snapshot fingerprint validity, and an error string; `JsonEventStore.OpenAsync` additionally checks source partition fingerprints and event/command coherence before using a checkpoint.
-
-State files accelerate writer activation only when one validates. They are not authoritative, do not make partition-backed reads seek from a checkpoint, and are built by replaying from partition 1 through each target rather than incrementally extending an earlier state file.
+State files are optional recovery accelerators, not authority. Invalid files are ignored and full authoritative replay remains the fallback.
 
 ## Index Files
 
-Index filenames use the first 16 lowercase hex characters of SHA-256:
+The logical directory uses the first 16 lowercase hexadecimal SHA-256 characters of the event type and of `keyName + "\0" + keyValue`. Logical identity is also stored and validated in both manifest and generation content.
 
-- event component: hash of the event type
-- key component: hash of `keyName + "\0" + keyValue`
+`manifest_v1.json` identifies the complete published head and generation filename. Publishing creates `generation_{head:D20}_{guid:N}_v1.json` with `FileMode.CreateNew`, durable flushes it, then durably replaces the manifest through a unique temporary file. Generation files are never overwritten or cleaned up by the current implementation.
 
-The JSON content stores the full logical event type/key identity, format version, global index head, full matching event envelopes, and schema/key fingerprints. Logical identity is therefore in the file, not recoverable from the filename hash alone. Writes use a `.tmp` file, durable flush, then overwrite move.
-
-Indexes are asynchronous, derived, and potentially stale. `EVENTUAL_INDEX` may return only the persisted/in-memory index view. `COMMITTED_SCAN` reads authoritative committed partitions through an observed Main Writer head. Missing or corrupt discovered index files are ignored; explicit rebuild rehydrates from partitions. A matching commit also causes a missing index model to rebuild.
+Indexes are derived snapshots and can be stale after a recorded advancement fault or while a newer generation is being published. `EVENTUAL_INDEX` returns a published immutable view when every query component is supported, otherwise it uses a partition-backed snapshot. `COMMITTED_SCAN` and decision hydration use an authoritative indexed prefix plus a bounded Read tail through Main's observed head. A missing or corrupt generation causes authoritative reads to scan rather than trust it.
 
 ## Current Limitations
 
-- Full-log scanning still occurs for partition-backed reads. Writer startup replays only the tail after a valid checkpoint, but falls back to a full replay when none validates; there is no general partition seek/manifest optimization.
-- Index-assisted hydration still performs a committed query scan when an index is absent or when completing a lagging tail.
-- State-file generation replays the complete prefix for each target, and existing-file reuse validation is less comprehensive than startup checkpoint validation.
-- Notifications are in-process events and direct grain calls, not durable pub/sub.
-- Index notification failures are swallowed/recorded and do not alter commit success.
-- Prepared remote decisions are stateless bearer capabilities. There is no server-side continuation store, revocation list, caller binding, or automatic completion retry.
-- There are no record/batch/file size limits, compaction, retention, checksums, backups, or repair commands for authoritative partitions.
-- The design is not safe for multiple silos sharing one filesystem except insofar as the OS lock rejects a second writer process.
+- Partition-backed reads still scan files; there is no general partition seek/manifest optimization.
+- State-file generation and index rebuild can replay large prefixes, though StateBuilder can seed from an earlier valid checkpoint.
+- Index generations are retained indefinitely.
+- Main awaits index advancement after durable commit, so cancellation/failure after durability can still produce an ambiguous client result even though index actors isolate ordinary derived-file faults.
+- Subscriptions poll and are not durable across actor/process failure.
+- Prepared remote decisions are stateless bearer capabilities with no continuation store, revocation list, caller binding, or automatic completion retry.
+- There are no record/batch/file size limits, compaction, retention, backups, or repair commands for authoritative partitions.
+- The design is not safe for multiple silos sharing one filesystem except that `store.lock` rejects a second writer process.

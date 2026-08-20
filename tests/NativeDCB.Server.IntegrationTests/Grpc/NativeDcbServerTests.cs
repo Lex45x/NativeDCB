@@ -155,7 +155,8 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
             await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "school" });
         Assert.Equal(DatabaseState.Ready, created.Database.State);
         Assert.Equal(expected: 0, created.Database.MainHead);
-        Assert.True(File.Exists(Path.Combine(_factory.DatabaseRoot, "school", "catalog_v1.json")));
+        Assert.True(File.Exists(Path.Combine(_factory.DatabaseRoot, "school", "schemas_v1.json")));
+        Assert.True(File.Exists(Path.Combine(_factory.DatabaseRoot, "school", "handlers_v1.json")));
 
         RegisterHandlerResponse define = await RegisterAsync(catalog, "DefineCourse", "DefineCourse", CreateCourseNdl);
         RegisterHandlerResponse subscribe = await RegisterAsync(
@@ -417,6 +418,12 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         Assert.True(partitions.Partitions[index: 0].StateFile.SchemaValid);
         Assert.True(partitions.Partitions[index: 1].Active);
 
+        GetStateFileStatusResponse stateStatus = await administration.GetStateFileStatusAsync(
+            new GetStateFileStatusRequest { Database = "school", PartitionNumber = 1 });
+        Assert.True(stateStatus.Status.Present);
+        Assert.True(stateStatus.Status.JsonValid);
+        Assert.True(stateStatus.Status.SchemaValid);
+
         RebuildResponse rebuild = await administration.RequestStateRebuildAsync(new RequestStateRebuildRequest
         {
             Database = "school",
@@ -512,6 +519,10 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
 
         await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "school" });
         await RegisterAsync(catalog, "DefineCourse", "DefineCourse", CreateCourseNdl);
+        ListIndexesResponse emptyIndexes = await administration.ListIndexesAsync(
+            new ListIndexesRequest { Database = "school" });
+        Assert.Empty(emptyIndexes.Indexes);
+
         await ExecuteAsync(
             commands, "DefineCourse", Guid.NewGuid(), new { CourseId = "course-1", Capacity = 1 });
 
@@ -535,7 +546,12 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
             Assert.Equal(expected: 1, index.IndexHead);
             Assert.Equal(expected: 1, index.MainHead);
             Assert.Equal((ulong)0, index.Lag);
-            Assert.True(File.Exists(Path.Combine(_factory.DatabaseRoot, "school", index.Filename)));
+            string manifestPath = Path.Combine(_factory.DatabaseRoot, "school", index.Filename);
+            Assert.True(File.Exists(manifestPath));
+            using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            string generationFile = manifest.RootElement.GetProperty("generationFile").GetString()!;
+            Assert.Matches("^generation_00000000000000000001_[0-9a-f]{32}_v1\\.json$", generationFile);
+            Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(manifestPath)!, generationFile)));
         });
 
         ReadEventsByQueryRequest eventualRequest = new()
@@ -552,6 +568,67 @@ public sealed class NativeDcbServerTests : IAsyncLifetime
         IReadOnlyList<EventEnvelope> indexedEvents = await ReadAllAsync(
             events.ReadEventsByQuery(eventualRequest).ResponseStream);
         Assert.Equal(expected: 1, Assert.Single(indexedEvents).EventId);
+
+        IndexStatus capacityIndex = Assert.Single(
+            indexes.Indexes, value => value.Keys.Single().Key == "Capacity");
+        string capacityManifestPath = Path.Combine(
+            _factory.DatabaseRoot, "school", capacityIndex.Filename);
+        string staleManifest = File.ReadAllText(capacityManifestPath);
+        await ExecuteAsync(
+            commands, "DefineCourse", Guid.NewGuid(), new { CourseId = "course-2", Capacity = 1 });
+        long publishedHead = 0;
+        for (int attempt = 0; attempt < 50; attempt++)
+        {
+            try
+            {
+                using JsonDocument published = JsonDocument.Parse(File.ReadAllText(capacityManifestPath));
+                publishedHead = published.RootElement.GetProperty("head").GetInt64();
+                if (publishedHead == 2)
+                {
+                    break;
+                }
+            }
+            catch (IOException)
+            {
+                // Atomic replacement can briefly deny a concurrent open on Windows.
+            }
+
+            await Task.Delay(millisecondsDelay: 20);
+        }
+
+        Assert.Equal(expected: 2, publishedHead);
+        File.WriteAllText(capacityManifestPath, staleManifest);
+
+        ReadEventsByQueryRequest capacityRequest = new()
+        {
+            Database = "school",
+            Consistency = QueryConsistency.EventualIndex,
+            Query = new Query()
+        };
+        capacityRequest.Query.Items.Add(new QueryItem
+        {
+            EventTypes = { "CourseDefined" },
+            Keys = { new KeyValue { Key = "Capacity", Value = "1" } }
+        });
+        IReadOnlyList<EventEnvelope> staleEvents = await ReadAllAsync(
+            events.ReadEventsByQuery(capacityRequest).ResponseStream);
+        Assert.Equal(expected: 1, Assert.Single(staleEvents).EventId);
+
+        capacityRequest.Consistency = QueryConsistency.CommittedScan;
+        IReadOnlyList<EventEnvelope> committedEvents = await ReadAllAsync(
+            events.ReadEventsByQuery(capacityRequest).ResponseStream);
+        Assert.Equal([1L, 2L], committedEvents.Select(value => value.EventId));
+
+        using (JsonDocument manifest = JsonDocument.Parse(staleManifest))
+        {
+            string generationFile = manifest.RootElement.GetProperty("generationFile").GetString()!;
+            File.WriteAllText(Path.Combine(Path.GetDirectoryName(capacityManifestPath)!, generationFile), "{}");
+        }
+
+        capacityRequest.Consistency = QueryConsistency.EventualIndex;
+        IReadOnlyList<EventEnvelope> recoveredEvents = await ReadAllAsync(
+            events.ReadEventsByQuery(capacityRequest).ResponseStream);
+        Assert.Equal([1L, 2L], recoveredEvents.Select(value => value.EventId));
 
         RebuildResponse rebuild = await administration.RequestIndexRebuildAsync(new RequestIndexRebuildRequest
         {

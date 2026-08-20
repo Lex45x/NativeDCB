@@ -1,5 +1,17 @@
 <Solution>
+  <Folder Name="/docs/">
+    <File Path="docs/actor-architecture.md" />
+    <File Path="docs/cli.md" />
+    <File Path="docs/database-lifecycle.md" />
+    <File Path="docs/dotnet-sdk.md" />
+    <File Path="docs/dsl.md" />
+    <File Path="docs/grpc-api.md" />
+    <File Path="docs/internal-engine.md" />
+    <File Path="docs/requirements.md" />
+    <File Path="docs/solution-structure.md" />
+  </Folder>
   <Folder Name="/src/">
+    <Project Path="src/NativeDCB.Actors/NativeDCB.Actors.csproj" />
     <Project Path="src/NativeDCB.Engine/NativeDCB.Engine.csproj" />
     <Project Path="src/NativeDCB.Cli/NativeDCB.Cli.csproj" />
     <Project Path="src/NativeDCB.Model/NativeDCB.Model.csproj" />

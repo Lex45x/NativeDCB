@@ -1,15 +1,11 @@
-using System.Threading.Channels;
-
 using Grpc.Core;
 
-using NativeDCB.Engine.Actors.Contracts;
-using NativeDCB.Engine.Actors.Mapping;
-using NativeDCB.Engine.Actors.Messages;
-using NativeDCB.Engine.Storage.EventLog;
+using NativeDCB.Actors.Contracts;
+using NativeDCB.Actors.Mapping;
+using NativeDCB.Actors.Messages;
 using NativeDCB.Model.Events;
 using NativeDCB.Model.Queries;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Databases;
 using NativeDCB.Server.Decisions.Transactions;
 using NativeDCB.Server.Grpc.Infrastructure;
 
@@ -17,13 +13,16 @@ using QueryItem = NativeDCB.Model.Queries.QueryItem;
 
 namespace NativeDCB.Server.Grpc;
 
-public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory grains) : EventService.EventServiceBase
+public sealed class EventGrpcService(IGrainFactory grains) : EventService.EventServiceBase
 {
+    private const int SubscriptionBatchSize = 256;
+
     public override async Task ReadEventsByRange(
         ReadEventsByRangeRequest request,
         IServerStreamWriter<EventEnvelope> responseStream,
         ServerCallContext context)
     {
+        ValidateDatabase(request.Database);
         ValidateRange(request.AfterEventId, request.HasThroughEventId ? request.ThroughEventId : null);
         ValidateLimit(request.HasLimit ? request.Limit : null);
         if (request.Mode is not (ReadMode.Unspecified or ReadMode.Snapshot or ReadMode.Follow))
@@ -31,7 +30,6 @@ public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory gr
             throw ProtocolMapper.InvalidArgument("The read mode is invalid.");
         }
 
-        DatabaseEntry database = GetDatabase(request.Database);
         if (request.Mode == ReadMode.Follow)
         {
             if (request.HasThroughEventId)
@@ -39,23 +37,28 @@ public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory gr
                 throw ProtocolMapper.InvalidArgument("Follow mode cannot specify through_event_id.");
             }
 
-            DatabaseEntry openDatabase = await OpenDatabaseAsync(request.Database, context.CancellationToken)
-                .ConfigureAwait(continueOnCapturedContext: false);
-            await FollowRangeAsync(
-                    openDatabase, request.AfterEventId, responseStream,
-                    request.HasLimit ? request.Limit : null, context.CancellationToken)
+            EventSubscriptionOpenMessage open = new(
+                request.Database,
+                EventSubscriptionKind.Range,
+                new EventQueryMessage([]),
+                [],
+                request.AfterEventId,
+                request.HasLimit ? checked((int)request.Limit) : null);
+            await StreamSubscriptionAsync(open, responseStream, context.CancellationToken)
                 .ConfigureAwait(continueOnCapturedContext: false);
             return;
         }
 
-        long head = await GetHeadAsync(database, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        long through = request.HasThroughEventId ? Math.Min(request.ThroughEventId, head) : head;
-        IReadOnlyList<SequencedEvent> events = await ReadRangeAsync(
-                database, request.AfterEventId, through, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        await ProtocolMapper.WriteAsync(responseStream, events, request.HasLimit ? request.Limit : null,
+        IReadGrain reader = grains.GetGrain<IReadGrain>(request.Database);
+        EventReadSnapshotMessage snapshot = await CallAsync(
+                token => reader.ReadRangeSnapshotAsync(
+                    request.AfterEventId,
+                    request.HasThroughEventId ? request.ThroughEventId : null,
+                    MaxCount(request.HasLimit, request.Limit),
+                    token),
                 context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        await WriteAsync(responseStream, snapshot.Events, context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     }
 
@@ -64,21 +67,21 @@ public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory gr
         IServerStreamWriter<EventEnvelope> responseStream,
         ServerCallContext context)
     {
+        ValidateDatabase(request.Database);
         ValidateRange(request.AfterEventId, request.HasThroughEventId ? request.ThroughEventId : null);
         ValidateLimit(request.HasLimit ? request.Limit : null);
         ValidateConsistency(request.Consistency);
-        DatabaseEntry database = GetDatabase(request.Database);
-        long head = await GetHeadAsync(database, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        long through = request.HasThroughEventId ? Math.Min(request.ThroughEventId, head) : head;
-        EventQuery query = ProtocolMapper.ToQuery(request.Query);
-        IReadOnlyList<SequencedEvent> events = await ReadByQueryAsync(
-                database, query, through, request.Consistency, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        IEnumerable<SequencedEvent> selected =
-            events.Where(x => x.EventId > request.AfterEventId && x.EventId <= through);
-        await ProtocolMapper.WriteAsync(responseStream, selected, request.HasLimit ? request.Limit : null,
+        EventQueryMessage query = ActorMessageMapper.ToMessage(ProtocolMapper.ToQuery(request.Query));
+        IndexQueryResultMessage snapshot = await ReadQuerySnapshotAsync(
+                request.Database,
+                query,
+                request.AfterEventId,
+                request.HasThroughEventId ? request.ThroughEventId : null,
+                MaxCount(request.HasLimit, request.Limit),
+                request.Consistency,
                 context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        await WriteAsync(responseStream, snapshot.Events, context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     }
 
@@ -87,6 +90,7 @@ public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory gr
         IServerStreamWriter<EventEnvelope> responseStream,
         ServerCallContext context)
     {
+        ValidateDatabase(request.Database);
         if (string.IsNullOrWhiteSpace(request.EventType))
         {
             throw ProtocolMapper.InvalidArgument("An event type is required.");
@@ -95,21 +99,20 @@ public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory gr
         ValidateRange(request.AfterEventId, request.HasThroughEventId ? request.ThroughEventId : null);
         ValidateLimit(request.HasLimit ? request.Limit : null);
         ValidateConsistency(request.Consistency);
-        DatabaseEntry database = GetDatabase(request.Database);
-        long head = await GetHeadAsync(database, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        long through = request.HasThroughEventId ? Math.Min(request.ThroughEventId, head) : head;
         EventQuery query = new([
             new QueryItem(
                 [request.EventType], request.Keys.Select(ProtocolMapper.ToEventKey).ToArray())
         ]);
-        IReadOnlyList<SequencedEvent> events = await ReadByQueryAsync(
-                database, query, through, request.Consistency, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        IEnumerable<SequencedEvent> selected =
-            events.Where(x => x.EventId > request.AfterEventId && x.EventId <= through);
-        await ProtocolMapper.WriteAsync(responseStream, selected, request.HasLimit ? request.Limit : null,
+        IndexQueryResultMessage snapshot = await ReadQuerySnapshotAsync(
+                request.Database,
+                ActorMessageMapper.ToMessage(query),
+                request.AfterEventId,
+                request.HasThroughEventId ? request.ThroughEventId : null,
+                MaxCount(request.HasLimit, request.Limit),
+                request.Consistency,
                 context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        await WriteAsync(responseStream, snapshot.Events, context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     }
 
@@ -118,215 +121,152 @@ public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory gr
         IServerStreamWriter<EventEnvelope> responseStream,
         ServerCallContext context)
     {
+        ValidateDatabase(request.Database);
         ValidateRange(request.AfterEventId, through: null);
-        DatabaseEntry database = await OpenDatabaseAsync(request.Database, context.CancellationToken)
+        EventQueryMessage query = ActorMessageMapper.ToMessage(ProtocolMapper.ToQuery(request.Query));
+        EventKeyMessage[] requiredKeys = request.Keys
+            .Select(ProtocolMapper.ToEventKey)
+            .Select(value => new EventKeyMessage(value.Name, value.Value))
+            .ToArray();
+        EventSubscriptionOpenMessage open = new(
+            request.Database,
+            EventSubscriptionKind.Query,
+            query,
+            requiredKeys,
+            request.AfterEventId,
+            Limit: null);
+        await StreamSubscriptionAsync(open, responseStream, context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        EventQuery query = ProtocolMapper.ToQuery(request.Query);
-        EventKey[] simpleKeys = request.Keys.Select(ProtocolMapper.ToEventKey).ToArray();
-        Channel<SequencedEvent> channel = Channel.CreateBounded<SequencedEvent>(
-            new BoundedChannelOptions(capacity: 1024)
-            {
-                SingleWriter = false, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
-            });
-        long lastWritten = request.AfterEventId;
-        int overflowed = 0;
-
-        void OnCommitted(SequencedEvent value)
-        {
-            // ReSharper disable once AccessToModifiedClosure -- Volatile coordinates replay and live callbacks.
-            if (value.EventId > Volatile.Read(ref lastWritten) && Matches(value, query, simpleKeys))
-            {
-                if (!channel.Writer.TryWrite(value))
-                {
-                    // ReSharper disable once AccessToModifiedClosure -- Interlocked publishes overflow to the reader.
-                    Interlocked.Exchange(ref overflowed, value: 1);
-                    channel.Writer.TryComplete();
-                }
-            }
-        }
-
-        database.Store.EventCommitted += OnCommitted;
-        try
-        {
-            long replayHead = await GetHeadAsync(database, context.CancellationToken)
-                .ConfigureAwait(continueOnCapturedContext: false);
-            IReadOnlyList<SequencedEvent> replay = await ReadByQueryAsync(
-                database, query, replayHead, QueryConsistency.CommittedScan,
-                context.CancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            foreach (SequencedEvent value in replay.Where(x =>
-                         x.EventId > request.AfterEventId && x.EventId <= replayHead && Matches(x, query, simpleKeys)))
-            {
-                await responseStream.WriteAsync(ProtocolMapper.ToEnvelope(value), context.CancellationToken)
-                    .ConfigureAwait(continueOnCapturedContext: false);
-                Volatile.Write(ref lastWritten, value.EventId);
-            }
-
-            await foreach (SequencedEvent value in channel.Reader.ReadAllAsync(context.CancellationToken)
-                               .ConfigureAwait(continueOnCapturedContext: false))
-            {
-                if (value.EventId <= Volatile.Read(ref lastWritten))
-                {
-                    continue;
-                }
-
-                await responseStream.WriteAsync(ProtocolMapper.ToEnvelope(value), context.CancellationToken)
-                    .ConfigureAwait(continueOnCapturedContext: false);
-                Volatile.Write(ref lastWritten, value.EventId);
-            }
-
-            if (Volatile.Read(ref overflowed) != 0)
-            {
-                throw ProtocolMapper.ResourceExhausted(
-                    "The subscription consumer exceeded the live-event queue capacity.");
-            }
-        }
-        finally
-        {
-            database.Store.EventCommitted -= OnCommitted;
-            channel.Writer.TryComplete();
-        }
     }
 
-    private static bool Matches(SequencedEvent value, EventQuery query, IReadOnlyList<EventKey> simpleKeys)
-    {
-        return query.Matches(value) && simpleKeys.All(value.Keys.Contains);
-    }
-
-    private async Task FollowRangeAsync(
-        DatabaseEntry database,
-        long after,
-        IServerStreamWriter<EventEnvelope> responseStream,
-        uint? limit,
-        CancellationToken cancellationToken)
-    {
-        Channel<SequencedEvent> channel = Channel.CreateBounded<SequencedEvent>(
-            new BoundedChannelOptions(capacity: 1024)
-            {
-                SingleWriter = false, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
-            });
-        long lastWritten = after;
-        int written = 0;
-        int overflowed = 0;
-
-        void OnCommitted(SequencedEvent value)
-        {
-            // ReSharper disable once AccessToModifiedClosure -- Volatile coordinates replay and live callbacks.
-            if (value.EventId > Volatile.Read(ref lastWritten) && !channel.Writer.TryWrite(value))
-            {
-                // ReSharper disable once AccessToModifiedClosure -- Interlocked publishes overflow to the reader.
-                Interlocked.Exchange(ref overflowed, value: 1);
-                channel.Writer.TryComplete();
-            }
-        }
-
-        database.Store.EventCommitted += OnCommitted;
-        try
-        {
-            long replayHead = await GetHeadAsync(database, cancellationToken)
-                .ConfigureAwait(continueOnCapturedContext: false);
-            IReadOnlyList<SequencedEvent> replay = await ReadRangeAsync(
-                database, after, replayHead, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            foreach (SequencedEvent value in replay)
-            {
-                await responseStream.WriteAsync(ProtocolMapper.ToEnvelope(value), cancellationToken)
-                    .ConfigureAwait(continueOnCapturedContext: false);
-                Volatile.Write(ref lastWritten, value.EventId);
-                written++;
-                if (limit is not null && written >= limit)
-                {
-                    return;
-                }
-            }
-
-            await foreach (SequencedEvent value in channel.Reader.ReadAllAsync(cancellationToken)
-                               .ConfigureAwait(continueOnCapturedContext: false))
-            {
-                if (value.EventId <= Volatile.Read(ref lastWritten))
-                {
-                    continue;
-                }
-
-                await responseStream.WriteAsync(ProtocolMapper.ToEnvelope(value), cancellationToken)
-                    .ConfigureAwait(continueOnCapturedContext: false);
-                Volatile.Write(ref lastWritten, value.EventId);
-                written++;
-                if (limit is not null && written >= limit)
-                {
-                    return;
-                }
-            }
-
-            if (Volatile.Read(ref overflowed) != 0)
-            {
-                throw ProtocolMapper.ResourceExhausted("The follow consumer exceeded the live-event queue capacity.");
-            }
-        }
-        finally
-        {
-            database.Store.EventCommitted -= OnCommitted;
-            channel.Writer.TryComplete();
-        }
-    }
-
-    private async Task<IReadOnlyList<SequencedEvent>> ReadRangeAsync(
-        DatabaseEntry database,
-        long after,
-        long through,
-        CancellationToken cancellationToken)
-    {
-        if (through <= after || through == 0)
-        {
-            return [];
-        }
-
-        IReadGrain reader = grains.GetGrain<IReadGrain>(database.Name);
-        EventListMessage result = await GrainCall.RunAsync(
-            token => reader.ReadRangeAsync(after + 1, through, token),
-            cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        return result.Events.Select(ActorMessageMapper.ToModel).ToArray();
-    }
-
-    private async Task<IReadOnlyList<SequencedEvent>> ReadByQueryAsync(
-        DatabaseEntry database,
-        EventQuery query,
-        long through,
+    private async Task<IndexQueryResultMessage> ReadQuerySnapshotAsync(
+        string database,
+        EventQueryMessage query,
+        long afterEventIdExclusive,
+        long? throughEventIdInclusive,
+        int maxCount,
         QueryConsistency consistency,
         CancellationToken cancellationToken)
     {
-        if (consistency == QueryConsistency.EventualIndex && database.IsOpen)
-        {
-            IIndexCoordinatorGrain coordinator = grains.GetGrain<IIndexCoordinatorGrain>(database.Name);
-            IndexReadResultMessage indexed = await GrainCall.RunAsync(
-                token => coordinator.ReadAsync(ActorMessageMapper.ToMessage(query), token),
-                cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-            if (indexed.Supported)
-            {
-                return indexed.Events
-                    .Where(value => value.EventId <= through)
-                    .Select(ActorMessageMapper.ToModel)
-                    .ToArray();
-            }
-        }
-
-        IReadGrain reader = grains.GetGrain<IReadGrain>(database.Name);
-        EventListMessage result = await GrainCall.RunAsync(
-            token => reader.ReadByQueryAsync(ActorMessageMapper.ToMessage(query), through, token),
-            cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        return result.Events.Select(ActorMessageMapper.ToModel).ToArray();
+        IIndexOrchestratorGrain orchestrator = grains.GetGrain<IIndexOrchestratorGrain>(database);
+        return consistency == QueryConsistency.EventualIndex
+            ? await CallAsync(
+                    token => orchestrator.ReadEventualAsync(
+                        query, afterEventIdExclusive, throughEventIdInclusive, maxCount, token),
+                    cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false)
+            : await CallAsync(
+                    token => orchestrator.ReadAuthoritativeAsync(
+                        query, afterEventIdExclusive, throughEventIdInclusive, maxCount, token),
+                    cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    private async Task<long> GetHeadAsync(DatabaseEntry database, CancellationToken cancellationToken)
+    private async Task StreamSubscriptionAsync(
+        EventSubscriptionOpenMessage open,
+        IServerStreamWriter<EventEnvelope> responseStream,
+        CancellationToken cancellationToken)
     {
-        if (!database.IsOpen)
+        IEventSubscriptionGrain subscription = grains.GetGrain<IEventSubscriptionGrain>(
+            Guid.NewGuid().ToString("N"));
+        try
         {
-            return await PartitionEventReader.GetHeadAsync(database.Directory, cancellationToken)
+            await CallAsync(token => subscription.OpenAsync(open, token), cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
+            while (true)
+            {
+                EventSubscriptionReadResultMessage next = await CallAsync(
+                        token => subscription.ReadNextAsync(
+                            new EventSubscriptionReadNextMessage(SubscriptionBatchSize), token),
+                        cancellationToken)
+                    .ConfigureAwait(continueOnCapturedContext: false);
+                await WriteAsync(responseStream, next.Events, cancellationToken)
+                    .ConfigureAwait(continueOnCapturedContext: false);
+                if (next.Completed)
+                {
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            await CallAsync(
+                    token => subscription.CloseAsync(new EventSubscriptionCloseMessage(), token),
+                    CancellationToken.None)
                 .ConfigureAwait(continueOnCapturedContext: false);
         }
+    }
 
-        IMainWriterGrain writer = grains.GetGrain<IMainWriterGrain>(database.Name);
-        WriterStateMessage state = await GrainCall.RunAsync(writer.GetStateAsync, cancellationToken)
+    private static async Task WriteAsync(
+        IServerStreamWriter<EventEnvelope> responseStream,
+        IEnumerable<SequencedEventMessage> events,
+        CancellationToken cancellationToken)
+    {
+        foreach (SequencedEventMessage value in events)
+        {
+            await responseStream.WriteAsync(
+                    ProtocolMapper.ToEnvelope(ActorMessageMapper.ToModel(value)), cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
+        }
+    }
+
+    private static async Task<T> CallAsync<T>(
+        Func<GrainCancellationToken, Task<T>> call,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await GrainCall.RunAsync(call, cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
+        }
+        catch (Exception exception) when (exception is not RpcException and not OperationCanceledException)
+        {
+            throw MapActorException(exception);
+        }
+    }
+
+    private static async Task CallAsync(
+        Func<GrainCancellationToken, Task> call,
+        CancellationToken cancellationToken)
+    {
+        await CallAsync(async token =>
+            {
+                await call(token).ConfigureAwait(continueOnCapturedContext: false);
+                return true;
+            }, cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        return state.Head;
+    }
+
+    private static Exception MapActorException(Exception exception)
+    {
+        Exception root = exception.GetBaseException();
+        return root switch
+        {
+            ArgumentException => ProtocolMapper.InvalidArgument(root.Message),
+            DirectoryNotFoundException or KeyNotFoundException => ProtocolMapper.NotFound(root.Message),
+            InvalidDataException => ProtocolMapper.DataLoss(root.Message),
+            IOException or UnauthorizedAccessException => ProtocolMapper.Unavailable(root.Message),
+            _ => exception
+        };
+    }
+
+    private static int MaxCount(bool hasLimit, uint limit)
+    {
+        return hasLimit ? checked((int)limit) : int.MaxValue;
+    }
+
+    private static void ValidateDatabase(string database)
+    {
+        if (string.IsNullOrWhiteSpace(database) || Path.IsPathRooted(database))
+        {
+            throw ProtocolMapper.InvalidArgument("A relative database name is required.");
+        }
+
+        string normalized = database.Replace('\\', '/').Trim('/');
+        if (normalized.Split('/').Any(segment => segment is "" or "." or ".."))
+        {
+            throw ProtocolMapper.InvalidArgument("The database name contains an invalid path segment.");
+        }
     }
 
     private static void ValidateRange(long after, long? through)
@@ -352,38 +292,6 @@ public sealed class EventGrpcService(DatabaseRegistry registry, IGrainFactory gr
             QueryConsistency.CommittedScan))
         {
             throw ProtocolMapper.InvalidArgument("The query consistency mode is invalid.");
-        }
-    }
-
-    private DatabaseEntry GetDatabase(string name)
-    {
-        try
-        {
-            return registry.Get(name);
-        }
-        catch (ArgumentException exception)
-        {
-            throw ProtocolMapper.InvalidArgument(exception.Message);
-        }
-        catch (KeyNotFoundException exception)
-        {
-            throw ProtocolMapper.NotFound(exception.Message);
-        }
-    }
-
-    private async Task<DatabaseEntry> OpenDatabaseAsync(string name, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await registry.GetAsync(name, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
-        }
-        catch (ArgumentException exception)
-        {
-            throw ProtocolMapper.InvalidArgument(exception.Message);
-        }
-        catch (KeyNotFoundException exception)
-        {
-            throw ProtocolMapper.NotFound(exception.Message);
         }
     }
 }

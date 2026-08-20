@@ -63,6 +63,24 @@ public static class PartitionEventReader
             value.EventId >= fromEventIdInclusive && value.EventId <= toEventIdInclusive).ToArray();
     }
 
+    public static async Task<EventReadSnapshot> ReadRangeSnapshotAsync(
+        string directory,
+        long afterEventIdExclusive,
+        long? throughEventIdInclusive,
+        int maxCount,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSnapshotRange(afterEventIdExclusive, throughEventIdInclusive, maxCount);
+        RecoveredLog recovered = await RecoverAsync(directory, cancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        long through = Math.Min(throughEventIdInclusive ?? recovered.Head, recovered.Head);
+        SequencedEvent[] events = recovered.Events
+            .Where(value => value.EventId > afterEventIdExclusive && value.EventId <= through)
+            .Take(maxCount)
+            .ToArray();
+        return new EventReadSnapshot(recovered.Head, events);
+    }
+
     public static async Task<IReadOnlyList<SequencedEvent>> ReadByQueryAsync(
         string directory,
         EventQuery query,
@@ -79,6 +97,28 @@ public static class PartitionEventReader
             .ConfigureAwait(continueOnCapturedContext: false);
         return recovered.Events.Where(value =>
             value.EventId <= throughEventIdInclusive && query.Matches(value)).ToArray();
+    }
+
+    public static async Task<EventReadSnapshot> ReadQuerySnapshotAsync(
+        string directory,
+        EventQuery query,
+        long afterEventIdExclusive,
+        long? throughEventIdInclusive,
+        int maxCount,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ValidateSnapshotRange(afterEventIdExclusive, throughEventIdInclusive, maxCount);
+        RecoveredLog recovered = await RecoverAsync(directory, cancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        long through = Math.Min(throughEventIdInclusive ?? recovered.Head, recovered.Head);
+        SequencedEvent[] events = recovered.Events
+            .Where(value => value.EventId > afterEventIdExclusive &&
+                            value.EventId <= through &&
+                            query.Matches(value))
+            .Take(maxCount)
+            .ToArray();
+        return new EventReadSnapshot(recovered.Head, events);
     }
 
     public static async Task<IReadOnlyList<SequencedEvent>> ReadByCommandIdAsync(
@@ -104,6 +144,33 @@ public static class PartitionEventReader
             : [];
     }
 
+    public static async Task<CommandEventSnapshot> ReadCommandSnapshotAsync(
+        string directory,
+        Guid commandId,
+        CancellationToken cancellationToken = default)
+    {
+        if (commandId == Guid.Empty)
+        {
+            throw new ArgumentException("A command ID is required.", nameof(commandId));
+        }
+
+        string path = Path.GetFullPath(directory);
+        DatabaseMetadata metadata = await ReadMetadataAsync(path, cancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        RecoveredLog recovered = await LogRecovery.RecoverAsync(
+                JsonEventStore.DiscoverPartitions(path),
+                trimActivePartition: false,
+                tolerateIncompleteActivePartition: true,
+                metadata.StoreId,
+                cancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        IReadOnlyList<SequencedEvent> events = recovered.Commands.TryGetValue(
+            commandId, out List<SequencedEvent>? committed)
+            ? committed.ToArray()
+            : [];
+        return new CommandEventSnapshot(metadata.StoreId, recovered.Head, events);
+    }
+
     private static async Task<RecoveredLog> RecoverAsync(string directory, CancellationToken cancellationToken)
     {
         string path = Path.GetFullPath(directory);
@@ -115,6 +182,23 @@ public static class PartitionEventReader
             tolerateIncompleteActivePartition: true,
             metadata.StoreId,
             cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+    }
+
+    private static void ValidateSnapshotRange(
+        long afterEventIdExclusive,
+        long? throughEventIdInclusive,
+        int maxCount)
+    {
+        if (afterEventIdExclusive < 0 || throughEventIdInclusive < 0 ||
+            (throughEventIdInclusive is not null && throughEventIdInclusive <= afterEventIdExclusive))
+        {
+            throw new ArgumentOutOfRangeException(nameof(afterEventIdExclusive));
+        }
+
+        if (maxCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxCount));
+        }
     }
 
     private static async Task<DatabaseMetadata> ReadMetadataAsync(
