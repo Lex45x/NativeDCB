@@ -1,8 +1,6 @@
 using Grpc.Core;
 using Grpc.Core.Interceptors;
 
-using NativeDCB.Engine.Storage.EventLog;
-
 namespace NativeDCB.Server.Grpc.Infrastructure;
 
 public sealed class GrpcExceptionInterceptor(ILogger<GrpcExceptionInterceptor> logger) : Interceptor
@@ -51,7 +49,6 @@ public sealed class GrpcExceptionInterceptor(ILogger<GrpcExceptionInterceptor> l
         return root switch
         {
             InvalidDataException => ProtocolMapper.DataLoss(root.Message),
-            EventStoreUnavailableException => ProtocolMapper.Unavailable(root.Message),
             IOException => ProtocolMapper.Unavailable(root.Message),
             UnauthorizedAccessException => ProtocolMapper.Unavailable(root.Message),
             _ => ProtocolMapper.Internal("An unexpected server error occurred.")

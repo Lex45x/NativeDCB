@@ -13,6 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\NativeDCB.Actors\NativeDCB.Actors.csproj" />
     <ProjectReference Include="..\NativeDCB.Engine\NativeDCB.Engine.csproj" />
     <ProjectReference Include="..\NativeDCB.Model\NativeDCB.Model.csproj" />
     <ProjectReference Include="..\NativeDCB.Ndl\NativeDCB.Ndl.csproj" />

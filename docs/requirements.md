@@ -1,7 +1,7 @@
 # NativeDCB Requirements
 
 Status: requirements reconciled with the current implementation  
-Last verified: 2026-08-18
+Last verified: 2026-08-19
 
 ## Purpose
 
@@ -16,21 +16,24 @@ This document does not remove unmet requirements. Each area is marked **Implemen
 | Global append-only sequence and positive `long` event IDs | Implemented | IDs are consecutive in normal operation; recovery validates global ordering. |
 | Atomic multi-event command batch | Implemented | Event records followed by a commit record provide recovery atomicity; success follows `Flush(true)`. |
 | DCB query and append condition | Implemented | Query items are ORed; event types within an item are ORed; all item keys must match. |
-| One writer per database | Implemented | Main Writer grain plus in-process store gate and exclusive `store.lock`. |
-| Consistent decision snapshot and boundary retry | Implemented | Transaction captures writer head, reads through it, and retries append conflicts until request cancellation/fault. |
+| One writer per database | Implemented | Non-reentrant Main Writer grain plus exclusive `store.lock`; `JsonEventStore` has no semaphore/gate. |
+| Consistent decision snapshot and boundary retry | Implemented | Decision obtains an authoritative `{ObservedHead, Events}` result from Index Orchestrator and retries append conflicts until request cancellation/fault. |
 | Command-ID reconciliation | Implemented | A command ID maps to at most one committed batch and duplicate execution returns `AlreadyCommitted`. |
 | Optional remote decision prepare/complete | Implemented | Preparation returns a hydrated structural model plus an HMAC capability; completion performs one catalog-checked conditional append and reports stale rather than retrying. |
 | JSON/NDJSON partitions and crash recovery | Implemented | See [Internal Engine](internal-engine.md). |
-| Durable current schema/handler catalog | Implemented | `catalog_v1.json` is atomically replaced using a temporary file. |
+| Durable current schema/handler catalog | Implemented | Schema and Handler actors independently replace `schemas_v1.json` and `handlers_v1.json` using unique temporary files. |
 | Optional schema validation | Partial | A deliberately small JSON Schema profile is implemented; no general JSON Schema engine or schema history exists. |
 | NDL authoring and execution | Partial | Decisions compile and execute. Explain/Execute validate every decision and reject duplicate names; Execute atomically registers all decisions only when the document is valid. Statements still only register handlers, and semantic/type analysis is limited. |
 | Fluent .NET authoring | Partial | Schema, builder, plan, and client APIs exist; expression coverage and analyzer/generator coverage are limited. |
 | Derived full-event indexes | Implemented | Public eventual reads can return the index snapshot; local and remote decision hydration combines indexed matches with an authoritative committed tail through the captured writer head. |
 | Cumulative state files | Implemented as optional recovery checkpoints | A valid full-event checkpoint restores writer state through a closed partition and only the remaining partitions replay; invalid checkpoints are ignored and full authoritative replay remains the fallback. |
-| Read availability without writer ownership | Partial | Finite EventService snapshot/query/type-and-key reads and command-ID reconciliation recover a committed head from shared partition reads when the store is not open. Follow/subscription, mutations, and `GetHead` still require writer activation; concurrent in-process activation/recovery has no separately specified synchronization guarantee. |
+| Read availability without writer ownership | Partial | Finite range reads, command-ID reconciliation, eventual-query fallbacks, index administration boundaries, and range-follow polling recover a committed head from shared partitions without opening Main. Authoritative query reads/subscriptions, mutations, state administration, and `GetHead` open Main; concurrent in-process activation/recovery has no separately specified synchronization guarantee. |
 | Buffered/grouped flush and pending reservations | Not implemented | Each append writes and flushes one batch under serialized writer access. |
 | Multi-silo deployment | Not implemented | Server uses `UseLocalhostClustering`; filesystem coordination is single-process. |
 | Native gRPC and browser gRPC-Web transports | Implemented | All six services expose both transports; browser origins come from `GrpcWeb:AllowedOrigins`. |
+| Actor-only database access and orchestration | Implemented | All 31 RPCs route database operations through `NativeDCB.Actors`; gRPC performs protocol validation/mapping and stream bridging. See [Actor Architecture](actor-architecture.md). |
+| Dedicated persistent-file ownership | Implemented | Main owns the event log, Schema owns `schemas_v1.json`, Handler owns `handlers_v1.json`, each Index actor owns one manifest/generation set, and each State actor owns one state file. |
+| Replicable index reads | Implemented | One Index actor per logical identity publishes write-once generations consumed by stateless Index Replica and Index Orchestrator actors. |
 | Security, audit, observability, backup/restore | Not implemented | Remote capabilities are HMAC-authenticated bearer values, but there is no caller authentication, authorization, audit sink, metrics/tracing, backup, or restore facility. |
 
 ## Core Invariants
@@ -48,7 +51,7 @@ The implementation enforces these invariants:
 9. Only batches with a matching commit marker are visible after recovery.
 10. Partition and index files are bound to logical identities stored in their content, not inferred solely from enumeration order or hashed names.
 
-The engine validates append conditions and persistence under one serialized store gate. Orleans also serializes calls to a Main Writer grain. This is the current single-writer correctness mechanism; there is no parallel-writer protocol.
+The non-reentrant Main Writer actor serializes append condition checks and persistence. `JsonEventStore` does not add a semaphore or gate. The OS-exclusive `store.lock` excludes a second process; there is no parallel-writer protocol.
 
 ## Decision Semantics
 
@@ -58,8 +61,8 @@ Current execution is:
 
 1. Parse and optionally schema-validate command JSON.
 2. Evaluate each include's command-derived key bindings to build the complete `EventQuery`.
-3. Read the Main Writer head.
-4. Ask the Read grain for every matching committed event through that head.
+3. Ask Index Orchestrator for an authoritative snapshot. It obtains Main's head, combines the authoritative indexed prefix with a Read-grain partition tail, and returns the observed head with ordered events.
+4. Use a full committed partition scan when the query is not index-supported or no valid published generation exists.
 5. Replay events in ascending event ID. For each event, matching includes run in source order and patch a structural dictionary model.
 6. Run `let` and `require` evaluation steps in order. The first failed requirement returns `DomainRejected` and appends nothing.
 7. Build one or more candidate payloads. Registered schemas validate payloads and derive keys; without a schema, all non-null scalar payload properties become keys.
@@ -101,6 +104,8 @@ The implementation does not support `$ref`, composition, unions, enum/const, str
 
 Replacement compatibility rejects removal of old required/key properties, type changes, key-name changes, and newly required properties unless `allow_incompatible` is true. Removal is allowed and persisted history is unchanged. Overrides are not audited in the current implementation.
 
+The actor implementation retains this runtime replacement check. It uses independently actor-owned `schemas_v1.json` and `handlers_v1.json` and does not read or migrate the pre-refactor `catalog_v1.json` format.
+
 ## Storage Requirements
 
 Implemented storage behavior includes:
@@ -114,7 +119,7 @@ Implemented storage behavior includes:
 - durable flush before acknowledgement
 - truncation of a provably incomplete suffix in the active partition
 - rejection of malformed committed prefixes, invalid identities, missing partition numbers, and inconsistent batches
-- derived cumulative state and full-event index JSON files
+- derived cumulative state files and index manifests with write-once generation JSON files
 - state schema `native-dcb-main-writer-state-v2`, full cumulative `SequencedEvent` snapshots, and SHA-256 fingerprints for each event snapshot and covered source partition
 
 State files and indexes are not authoritative. A state file accelerates writer recovery only after metadata, snapshot content, event/command coherence, and covered partition lengths and SHA-256 hashes validate; otherwise recovery ignores it and replays the authoritative log. State construction and partition-backed reads still scan full prefixes. See [Internal Engine](internal-engine.md) for exact records and filenames.
@@ -134,7 +139,6 @@ NativeDCB currently does not provide aggregate streams, payload predicates at th
 The original design still identifies useful future work, but it must not be assumed by callers:
 
 - build cumulative state files incrementally rather than replaying each complete prefix
-- hydrate transactions from index snapshots plus a partition tail
 - add bounded grouped flush and explicit pending-boundary reservations
 - define and test explicit synchronization guarantees for snapshot reads that overlap in-process writer activation/recovery
 - define production durability guarantees per filesystem

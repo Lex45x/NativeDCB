@@ -1,154 +1,131 @@
 using Grpc.Core;
 
-using NativeDCB.Engine.Actors.Contracts;
-using NativeDCB.Engine.Actors.Messages;
+using NativeDCB.Actors.Contracts;
+using NativeDCB.Actors.Messages;
 using NativeDCB.Protocol.V1;
-using NativeDCB.Server.Databases;
 using NativeDCB.Server.Decisions.Transactions;
 using NativeDCB.Server.Grpc.Infrastructure;
 
 namespace NativeDCB.Server.Grpc;
 
-public sealed class DatabaseGrpcService(DatabaseRegistry registry, IGrainFactory grains)
-    : DatabaseService.DatabaseServiceBase
+public sealed class DatabaseGrpcService(IGrainFactory grains) : DatabaseService.DatabaseServiceBase
 {
-    public override Task<ListDatabasesResponse> ListDatabases(
+    public override async Task<ListDatabasesResponse> ListDatabases(
         ListDatabasesRequest request,
         ServerCallContext context)
     {
+        ListDatabasesActorResponse result = await RunAsync(
+                (grain, token) => grain.ListAsync(new ListDatabasesActorRequest(), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
         ListDatabasesResponse response = new();
-        foreach (DatabaseEntry entry in registry.List())
-        {
-            DatabaseSummary summary = new()
-            {
-                Database = entry.Name,
-                State = ProtocolMapper.ToDatabaseState(entry.Status),
-                MainHead = entry.Head,
-                ReadAvailable = entry.ReadAvailable,
-                WriteAvailable = entry.WriteAvailable
-            };
-            if (entry.LastFault is { } fault)
-            {
-                summary.Fault = new ErrorDetail { Code = "DatabaseFaulted", Message = fault };
-            }
-
-            response.Databases.Add(summary);
-        }
-
-        return Task.FromResult(response);
+        response.Databases.AddRange(result.Databases.Select(ProtocolMapper.ToDatabaseSummary));
+        return response;
     }
 
     public override async Task<CreateDatabaseResponse> CreateDatabase(
         CreateDatabaseRequest request,
         ServerCallContext context)
     {
-        try
+        CreateDatabaseActorResponse result = await RunAsync(
+                (grain, token) => grain.CreateAsync(new CreateDatabaseActorRequest(request.Database), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        ThrowIfError(result.Error);
+        return new CreateDatabaseResponse
         {
-            DatabaseEntry entry = await registry.CreateAsync(request.Database, context.CancellationToken)
-                .ConfigureAwait(continueOnCapturedContext: false);
-            WriterStateMessage state = await GetWriterStateAsync(entry.Name, context.CancellationToken)
-                .ConfigureAwait(continueOnCapturedContext: false);
-            return new CreateDatabaseResponse { Database = ProtocolMapper.ToDatabaseInfo(entry, state) };
-        }
-        catch (ArgumentException exception)
-        {
-            throw ProtocolMapper.InvalidArgument(exception.Message);
-        }
-        catch (InvalidOperationException exception)
-        {
-            throw ProtocolMapper.AlreadyExists(exception.Message);
-        }
+            Database = ProtocolMapper.ToDatabaseInfo(result.Database!)
+        };
     }
 
-    public override Task<GetDatabaseInfoResponse> GetDatabaseInfo(
+    public override async Task<GetDatabaseInfoResponse> GetDatabaseInfo(
         GetDatabaseInfoRequest request,
         ServerCallContext context)
     {
-        try
+        GetDatabaseInfoActorResponse result = await RunAsync(
+                (grain, token) => grain.GetInfoAsync(new GetDatabaseInfoActorRequest(request.Database), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        ThrowIfError(result.Error);
+        return new GetDatabaseInfoResponse
         {
-            DatabaseEntry entry = registry.Get(request.Database);
-            return Task.FromResult(new GetDatabaseInfoResponse { Database = ProtocolMapper.ToDatabaseInfo(entry) });
-        }
-        catch (ArgumentException exception)
-        {
-            throw ProtocolMapper.InvalidArgument(exception.Message);
-        }
-        catch (KeyNotFoundException exception)
-        {
-            throw ProtocolMapper.NotFound(exception.Message);
-        }
+            Database = ProtocolMapper.ToDatabaseInfo(result.Database!)
+        };
     }
 
-    public override Task<GetHealthResponse> GetHealth(GetHealthRequest request, ServerCallContext context)
+    public override async Task<GetHealthResponse> GetHealth(
+        GetHealthRequest request,
+        ServerCallContext context)
     {
-        GetHealthResponse response = new() { Live = true };
-        foreach (DatabaseEntry entry in registry.List())
-        {
-            DatabaseHealth health = new()
-            {
-                Database = entry.Name,
-                State = ProtocolMapper.ToDatabaseState(entry.Status),
-                Live = true,
-                ReadReady = entry.ReadAvailable,
-                WriteReady = entry.WriteAvailable
-            };
-            if (entry.LastFault is { } fault)
-            {
-                health.Fault = new ErrorDetail { Code = "DatabaseFaulted", Message = fault };
-            }
-
-            response.Databases.Add(health);
-        }
-
-        return Task.FromResult(response);
+        GetHealthActorResponse result = await RunAsync(
+                (grain, token) => grain.GetHealthAsync(new GetHealthActorRequest(), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+        GetHealthResponse response = new() { Live = result.Live };
+        response.Databases.AddRange(result.Databases.Select(ProtocolMapper.ToDatabaseHealth));
+        return response;
     }
 
-    public override Task<GetCapabilitiesResponse> GetCapabilities(
+    public override async Task<GetCapabilitiesResponse> GetCapabilities(
         GetCapabilitiesRequest request,
         ServerCallContext context)
     {
+        GetCapabilitiesActorResponse result = await RunAsync(
+                (grain, token) => grain.GetCapabilitiesAsync(new GetCapabilitiesActorRequest(), token),
+                context.CancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
         GetCapabilitiesResponse response = new()
         {
-            ProtocolVersion = "v1", NdlVersion = "v1", SubscriptionsSupported = true
+            ProtocolVersion = result.ProtocolVersion,
+            NdlVersion = result.NdlVersion,
+            SubscriptionsSupported = result.SubscriptionsSupported
         };
-        response.FileFormatVersions.Add("1");
-        response.QueryFeatures.AddRange(["range", "type", "keys", "committed-scan"]);
-        response.Limits.Add("max_event_count_per_partition", value: 10_000);
-        return Task.FromResult(response);
+        response.FileFormatVersions.AddRange(result.FileFormatVersions);
+        response.QueryFeatures.AddRange(result.QueryFeatures);
+        foreach (CapabilityLimitMessage limit in result.Limits)
+        {
+            response.Limits.Add(limit.Name, limit.Value);
+        }
+
+        return response;
     }
 
-    public override async Task<GetHeadResponse> GetHead(GetHeadRequest request, ServerCallContext context)
+    public override async Task<GetHeadResponse> GetHead(
+        GetHeadRequest request,
+        ServerCallContext context)
     {
-        DatabaseEntry entry = await GetAsync(request.Database, context.CancellationToken)
+        GetMainHeadActorResponse result = await RunAsync(
+                (grain, token) => grain.GetMainHeadAsync(new GetMainHeadActorRequest(request.Database), token),
+                context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        WriterStateMessage state = await GetWriterStateAsync(entry.Name, context.CancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        return new GetHeadResponse { EventId = state.Head };
+        ThrowIfError(result.Error);
+        return new GetHeadResponse { EventId = result.EventId };
     }
 
-    private async Task<WriterStateMessage> GetWriterStateAsync(
-        string database,
+    private Task<T> RunAsync<T>(
+        Func<IDatabaseDirectoryGrain, GrainCancellationToken, Task<T>> call,
         CancellationToken cancellationToken)
     {
-        IMainWriterGrain writer = grains.GetGrain<IMainWriterGrain>(database);
-        return await GrainCall.RunAsync(
-            writer.GetStateAsync,
-            cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+        IDatabaseDirectoryGrain directory = grains.GetGrain<IDatabaseDirectoryGrain>(
+            IDatabaseDirectoryGrain.SingletonKey);
+        return GrainCall.RunAsync(token => call(directory, token), cancellationToken);
     }
 
-    private async Task<DatabaseEntry> GetAsync(string name, CancellationToken cancellationToken)
+    private static void ThrowIfError(DatabaseDirectoryErrorMessage? error)
     {
-        try
+        if (error is null)
         {
-            return await registry.GetAsync(name, cancellationToken).ConfigureAwait(continueOnCapturedContext: false);
+            return;
         }
-        catch (ArgumentException exception)
+
+        throw error.Kind switch
         {
-            throw ProtocolMapper.InvalidArgument(exception.Message);
-        }
-        catch (KeyNotFoundException exception)
-        {
-            throw ProtocolMapper.NotFound(exception.Message);
-        }
+            DatabaseDirectoryErrorKind.InvalidArgument => ProtocolMapper.InvalidArgument(error.Message),
+            DatabaseDirectoryErrorKind.NotFound => ProtocolMapper.NotFound(error.Message),
+            DatabaseDirectoryErrorKind.AlreadyExists => ProtocolMapper.AlreadyExists(error.Message),
+            DatabaseDirectoryErrorKind.Unavailable => ProtocolMapper.Unavailable(error.Message),
+            DatabaseDirectoryErrorKind.DataLoss => ProtocolMapper.DataLoss(error.Message),
+            _ => ProtocolMapper.Internal(error.Message)
+        };
     }
 }
