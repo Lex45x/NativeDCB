@@ -155,6 +155,16 @@ internal static class ProtocolMapper
         return Error(StatusCode.NotFound, "NotFound", message);
     }
 
+    public static RpcException PermissionDenied(string message)
+    {
+        return Error(StatusCode.PermissionDenied, "PermissionDenied", message);
+    }
+
+    public static RpcException Unauthenticated(string message)
+    {
+        return Error(StatusCode.Unauthenticated, "Unauthenticated", message);
+    }
+
     public static RpcException AlreadyExists(string message)
     {
         return Error(StatusCode.AlreadyExists, "AlreadyExists", message);

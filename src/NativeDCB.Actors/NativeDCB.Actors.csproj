@@ -13,6 +13,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="NativeDCB.Engine.Tests" />
     <InternalsVisibleTo Include="NativeDCB.MicroBenchmarks" />
+    <InternalsVisibleTo Include="NativeDCB.Server.IntegrationTests" />
   </ItemGroup>
 
   <PropertyGroup>

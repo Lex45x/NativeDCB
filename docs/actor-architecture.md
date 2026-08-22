@@ -55,7 +55,7 @@ Actor names describe roles rather than public services. There is no DatabaseServ
 
 ## Transport Boundary
 
-All 31 RPCs cross the actor boundary.
+All 31 database-operation RPCs cross the actor boundary. The three `AuthenticationService` RPCs manage the server-owned API-key catalog and do not enter database actors.
 
 | Public RPC | Actor entry point |
 |---|---|
@@ -77,7 +77,7 @@ All 31 RPCs cross the actor boundary.
 | `ListPartitions`, `GetStateFileStatus`, `RequestStateRebuild` | State Orchestrator |
 | `ListIndexes`, `RequestIndexRebuild` | Index Orchestrator |
 
-Generating an omitted command UUID, validating transport-shaped arguments, and constructing an Orleans actor key remain transport concerns. Every one of the 31 RPC implementations then enters the responsible actor. Streaming gRPC methods loop over `EventSubscriptionGrain.ReadNextAsync`; cursor, filtering, limits, polling, and deduplication remain in that actor.
+Generating an omitted command UUID, validating transport-shaped arguments, and constructing an Orleans actor key remain transport concerns. Every one of the 31 database-operation RPC implementations then enters the responsible actor. Streaming gRPC methods loop over `EventSubscriptionGrain.ReadNextAsync`; cursor, filtering, limits, polling, and deduplication remain in that actor.
 
 ## Decision Flow
 
@@ -188,7 +188,7 @@ There is no `DatabaseRegistry`, mutable `DatabaseEntry`, registry semaphore, cat
 
 ## Current Boundaries
 
-- All 31 gRPC methods route database operations into actors; gRPC retains protocol validation, actor-key construction, result mapping, and stream bridging.
+- All 31 database-operation gRPC methods route database work into actors; the three authentication methods remain server security operations.
 - Local and remote model construction occurs in command-keyed Decision actors through Index Orchestrator.
 - Finite reads and subscription polling contain no direct storage access in gRPC.
 - Schema, Handler, Main, Index, and State actors are the mutating paths for their respective files.

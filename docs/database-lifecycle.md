@@ -206,7 +206,7 @@ State generation failure does not change event authority or writer readiness. Ma
 - `write_ready` means Main is Ready with a non-faulted open store
 - state and last fault are returned separately
 
-This is filesystem-presence and actor-state health, not an active integrity probe. `/health/live` returns 200 while the app serves. `/health/ready` returns 200 when every enumerated Main is Ready or Discovered, otherwise 503. An empty root is ready.
+This is filesystem-presence and actor-state health, not an active integrity probe. `/health/live` returns 200 while the app serves. `/health/ready` returns 200 when every enumerated Main is Ready or Discovered and no bootstrap API key remains active, otherwise 503. An empty database root is not ready while the bootstrap credential awaits replacement.
 
 ## Shutdown
 
@@ -220,4 +220,4 @@ There is no configurable drain deadline, subscription completion guarantee, or b
 - explicit repair/restart operations and consistent data-loss state transitions
 - transactional database creation across independently owned files
 - graceful drain deadlines and subscription/background-work coordination
-- authentication/authorization, audit, backup/restore, and safe multi-silo topology
+- audit, backup/restore, and safe multi-silo topology

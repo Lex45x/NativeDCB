@@ -1,4 +1,8 @@
+using System.Globalization;
+using System.Net.Http.Headers;
+
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -58,7 +62,15 @@ internal static class CliApplication
                             ?? "http://localhost:5010";
             ValidateServer(server);
 
-            using GrpcChannel channel = GrpcChannel.ForAddress(server);
+            (string? scheme, string? credential) = await ReadCredentialAsync(arguments, cancellation.Token);
+            GrpcChannelOptions channelOptions = new();
+            if (scheme is not null && credential is not null)
+            {
+                channelOptions.HttpHandler = new CredentialHandler(
+                    scheme, credential, new HttpClientHandler());
+            }
+
+            using GrpcChannel channel = GrpcChannel.ForAddress(server, channelOptions);
             InputReader input = new(cancellation.Token);
             return await DispatchAsync(command, arguments, input, channel, cancellation.Token);
         }
@@ -125,6 +137,7 @@ internal static class CliApplication
         EventService.EventServiceClient events = new(channel);
         StatementService.StatementServiceClient statements = new(channel);
         AdministrationService.AdministrationServiceClient administration = new(channel);
+        AuthenticationService.AuthenticationServiceClient authentication = new(channel);
 
         switch (command)
         {
@@ -419,9 +432,78 @@ internal static class CliApplication
                             PartitionNumber = arguments.RequiredUInt32("partition")
                         }, cancellationToken: cancellationToken),
                     response => response.Accepted);
+            case "auth create-api-key":
+                arguments.EnsureAllowed("label", "permission", "expires");
+                CreateApiKeyRequest createKey = new() { Label = arguments.Required("label") };
+                createKey.Permissions.AddRange(arguments.Many("permission"));
+                if (arguments.Optional("expires") is { } expires)
+                {
+                    createKey.ExpiresUtc = Timestamp.FromDateTimeOffset(ParseTimestamp(expires, "expires"));
+                }
+
+                return await UnaryAsync(authentication.CreateApiKeyAsync(
+                    createKey, cancellationToken: cancellationToken));
+            case "auth list-api-keys":
+                arguments.EnsureAllowed();
+                return await UnaryAsync(authentication.ListApiKeysAsync(
+                    new ListApiKeysRequest(), cancellationToken: cancellationToken));
+            case "auth revoke-api-key":
+                arguments.EnsureAllowed("key-id");
+                return await UnaryAsync(authentication.RevokeApiKeyAsync(
+                    new RevokeApiKeyRequest { KeyId = arguments.Required("key-id") },
+                    cancellationToken: cancellationToken));
             default:
                 throw new CliUsageException($"Unknown command '{command}'.");
         }
+    }
+
+    private static async Task<(string? Scheme, string? Credential)> ReadCredentialAsync(
+        CliArguments arguments,
+        CancellationToken cancellationToken)
+    {
+        string? accessToken = await ReadCredentialValueAsync(
+            arguments.Optional("access-token-file"), "NATIVEDCB_ACCESS_TOKEN", cancellationToken);
+        string? apiKey = await ReadCredentialValueAsync(
+            arguments.Optional("api-key-file"), "NATIVEDCB_API_KEY", cancellationToken);
+        if (accessToken is not null && apiKey is not null)
+        {
+            throw new CliUsageException("Configure either an access token or an API key, not both.");
+        }
+
+        return accessToken is not null
+            ? ("Bearer", accessToken)
+            : apiKey is not null
+                ? ("ApiKey", apiKey)
+                : (null, null);
+    }
+
+    private static async Task<string?> ReadCredentialValueAsync(
+        string? path,
+        string environmentVariable,
+        CancellationToken cancellationToken)
+    {
+        string? value;
+        try
+        {
+            value = path is null
+                ? Environment.GetEnvironmentVariable(environmentVariable)
+                : await File.ReadAllTextAsync(path, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new CliInputException($"Could not read credential file: {exception.Message}", exception);
+        }
+
+        value = value?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    private static DateTimeOffset ParseTimestamp(string value, string option)
+    {
+        return DateTimeOffset.TryParse(
+            value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out DateTimeOffset timestamp)
+            ? timestamp
+            : throw new CliUsageException($"Option --{option} must be an ISO-8601 timestamp.");
     }
 
     private static async Task<int> RegisterSchemaAsync(
@@ -590,6 +672,20 @@ internal static class CliApplication
             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {
             throw new CliUsageException("--server must be an absolute http:// or https:// URL.");
+        }
+    }
+
+    private sealed class CredentialHandler(
+        string scheme,
+        string credential,
+        HttpMessageHandler innerHandler) : DelegatingHandler(innerHandler)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue(scheme, credential);
+            return base.SendAsync(request, cancellationToken);
         }
     }
 

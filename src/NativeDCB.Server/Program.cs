@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Options;
+
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Decisions.Remote;
 using NativeDCB.Actors.Messages;
@@ -6,10 +8,29 @@ using NativeDCB.Model.Databases;
 using NativeDCB.Server.Decisions.Transactions;
 using NativeDCB.Server.Grpc;
 using NativeDCB.Server.Grpc.Infrastructure;
+using NativeDCB.Server.Security;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddGrpc(options => options.Interceptors.Add<GrpcExceptionInterceptor>());
+if (args is ["auth", "recover-bootstrap-api-key"])
+{
+    NativeDcbAuthenticationOptions authentication =
+        builder.Configuration.GetSection("Authentication").Get<NativeDcbAuthenticationOptions>() ?? new();
+    ActorStorageOptions storage = builder.Configuration.Get<ActorStorageOptions>() ?? new();
+    ApiKeyStore recoveryStore = new(
+        Options.Create(authentication), Options.Create(storage), TimeProvider.System);
+    CreatedApiKey recovered = await recoveryStore.RecoverBootstrapAsync(CancellationToken.None);
+    Console.Out.WriteLine("NativeDCB replacement bootstrap API key (shown once):");
+    Console.Out.WriteLine(recovered.Credential);
+    return;
+}
+
+builder.AddNativeDcbAuthentication();
+builder.Services.AddGrpc(options =>
+{
+    options.Interceptors.Add<GrpcExceptionInterceptor>();
+    options.Interceptors.Add<GrpcAuthorizationInterceptor>();
+});
 string[] grpcWebOrigins = builder.Configuration.GetSection("GrpcWeb:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddPolicy("GrpcWeb", policy =>
 {
@@ -27,6 +48,7 @@ builder.Services.AddCors(options => options.AddPolicy("GrpcWeb", policy =>
     }
 }));
 builder.Services.AddSingleton<GrpcExceptionInterceptor>();
+builder.Services.AddSingleton<GrpcAuthorizationInterceptor>();
 builder.Services.Configure<ActorStorageOptions>(builder.Configuration);
 builder.Services.Configure<RemoteDecisionOptions>(builder.Configuration.GetSection("RemoteDecisions"));
 builder.Services.AddSingleton<ActorStoragePath>();
@@ -40,6 +62,8 @@ WebApplication app = builder.Build();
 
 app.UseGrpcWeb();
 app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGrpcService<DatabaseGrpcService>().EnableGrpcWeb().RequireCors("GrpcWeb");
 app.MapGrpcService<CatalogGrpcService>().EnableGrpcWeb().RequireCors("GrpcWeb");
@@ -47,17 +71,26 @@ app.MapGrpcService<EventGrpcService>().EnableGrpcWeb().RequireCors("GrpcWeb");
 app.MapGrpcService<CommandGrpcService>().EnableGrpcWeb().RequireCors("GrpcWeb");
 app.MapGrpcService<StatementGrpcService>().EnableGrpcWeb().RequireCors("GrpcWeb");
 app.MapGrpcService<AdministrationGrpcService>().EnableGrpcWeb().RequireCors("GrpcWeb");
+app.MapGrpcService<AuthenticationGrpcService>().EnableGrpcWeb().RequireCors("GrpcWeb");
 app.MapGet("/", () => "NativeDCB gRPC server");
-app.MapGet("/health/live", () => Results.Ok(new { live = true }));
-app.MapGet("/health/ready", async (IGrainFactory grains, CancellationToken cancellationToken) =>
+app.MapGet("/health/live", () => Results.Ok(new { live = true })).AllowAnonymous();
+app.MapGet("/health/ready", async (
+    IGrainFactory grains,
+    ApiKeyStore apiKeys,
+    CancellationToken cancellationToken) =>
 {
+    if (apiKeys.HasActiveBootstrap)
+    {
+        return Results.Json(new { ready = false }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
     GetHealthActorResponse health = await GrainCall.RunAsync(
         token => grains.GetGrain<IDatabaseDirectoryGrain>(IDatabaseDirectoryGrain.SingletonKey)
             .GetHealthAsync(new GetHealthActorRequest(), token), cancellationToken);
     return health.Databases.All(database => database.Status is DatabaseStatus.Ready or DatabaseStatus.Discovered)
         ? Results.Ok(new { ready = true })
         : Results.Json(new { ready = false }, statusCode: StatusCodes.Status503ServiceUnavailable);
-});
+}).AllowAnonymous();
 
 app.Run();
 

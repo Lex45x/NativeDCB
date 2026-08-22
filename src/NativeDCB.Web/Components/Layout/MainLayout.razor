@@ -1,5 +1,16 @@
 ﻿@inherits LayoutComponentBase
 
 <main class="console-shell">
+    <AuthorizeView>
+        <Authorized>
+            <div class="auth-strip">
+                <span>@context.User.Identity?.Name</span>
+                <a href="authentication/logout">Sign out</a>
+            </div>
+        </Authorized>
+        <NotAuthorized>
+            <div class="auth-strip"><a href="authentication/login">Sign in</a></div>
+        </NotAuthorized>
+    </AuthorizeView>
     @Body
 </main>

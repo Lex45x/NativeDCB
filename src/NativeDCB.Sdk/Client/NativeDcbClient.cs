@@ -24,6 +24,7 @@ namespace NativeDCB.Sdk.Client;
 public sealed class NativeDcbClient : IDisposable
 {
     private readonly AdministrationService.AdministrationServiceClient? _administrationClient;
+    private readonly AuthenticationService.AuthenticationServiceClient? _authenticationClient;
     private readonly CatalogService.CatalogServiceClient _catalogClient;
     private readonly CommandService.CommandServiceClient _commandClient;
     private readonly DatabaseService.DatabaseServiceClient? _databaseClient;
@@ -33,15 +34,41 @@ public sealed class NativeDcbClient : IDisposable
     private readonly StatementService.StatementServiceClient? _statementClient;
 
     public NativeDcbClient(string address, JsonSerializerOptions? jsonOptions = null)
+        : this(address, credentials: null, jsonOptions, createChannel: true)
     {
+    }
+
+    public NativeDcbClient(
+        string address,
+        NativeDcbCredentials credentials,
+        JsonSerializerOptions? jsonOptions = null)
+        : this(address, credentials ?? throw new ArgumentNullException(nameof(credentials)), jsonOptions,
+            createChannel: true)
+    {
+    }
+
+    private NativeDcbClient(
+        string address,
+        NativeDcbCredentials? credentials,
+        JsonSerializerOptions? jsonOptions,
+        bool createChannel)
+    {
+        _ = createChannel;
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
-        _ownedChannel = GrpcChannel.ForAddress(address);
+        GrpcChannelOptions channelOptions = new();
+        if (credentials is not null)
+        {
+            channelOptions.HttpHandler = new NativeDcbAuthenticationHandler(credentials, new HttpClientHandler());
+        }
+
+        _ownedChannel = GrpcChannel.ForAddress(address, channelOptions);
         _commandClient = new CommandService.CommandServiceClient(_ownedChannel);
         _eventClient = new EventService.EventServiceClient(_ownedChannel);
         _catalogClient = new CatalogService.CatalogServiceClient(_ownedChannel);
         _databaseClient = new DatabaseService.DatabaseServiceClient(_ownedChannel);
         _statementClient = new StatementService.StatementServiceClient(_ownedChannel);
         _administrationClient = new AdministrationService.AdministrationServiceClient(_ownedChannel);
+        _authenticationClient = new AuthenticationService.AuthenticationServiceClient(_ownedChannel);
         _jsonOptions = jsonOptions ?? JsonSerializerOptions.Default;
     }
 
@@ -62,6 +89,21 @@ public sealed class NativeDcbClient : IDisposable
     }
 
     public NativeDcbClient(
+        DatabaseService.DatabaseServiceClient databaseClient,
+        CatalogService.CatalogServiceClient catalogClient,
+        CommandService.CommandServiceClient commandClient,
+        EventService.EventServiceClient eventClient,
+        StatementService.StatementServiceClient statementClient,
+        AdministrationService.AdministrationServiceClient administrationClient,
+        AuthenticationService.AuthenticationServiceClient authenticationClient,
+        JsonSerializerOptions? jsonOptions = null)
+        : this(databaseClient, catalogClient, commandClient, eventClient, statementClient, administrationClient,
+            jsonOptions)
+    {
+        _authenticationClient = authenticationClient ?? throw new ArgumentNullException(nameof(authenticationClient));
+    }
+
+    public NativeDcbClient(
         CommandService.CommandServiceClient commandClient,
         EventService.EventServiceClient eventClient,
         CatalogService.CatalogServiceClient catalogClient,
@@ -76,6 +118,40 @@ public sealed class NativeDcbClient : IDisposable
     public void Dispose()
     {
         _ownedChannel?.Dispose();
+    }
+
+    public async Task<CreateApiKeyResponse> CreateApiKeyAsync(
+        string label,
+        IEnumerable<string> permissions,
+        DateTimeOffset? expiresUtc = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequired(label, nameof(label));
+        ArgumentNullException.ThrowIfNull(permissions);
+        CreateApiKeyRequest request = new() { Label = label };
+        request.Permissions.AddRange(permissions);
+        if (expiresUtc is not null)
+        {
+            request.ExpiresUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(expiresUtc.Value);
+        }
+
+        return await Require(_authenticationClient, nameof(AuthenticationService)).CreateApiKeyAsync(
+            request, cancellationToken: cancellationToken);
+    }
+
+    public async Task<ListApiKeysResponse> ListApiKeysAsync(CancellationToken cancellationToken = default)
+    {
+        return await Require(_authenticationClient, nameof(AuthenticationService)).ListApiKeysAsync(
+            new ListApiKeysRequest(), cancellationToken: cancellationToken);
+    }
+
+    public async Task<RevokeApiKeyResponse> RevokeApiKeyAsync(
+        string keyId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequired(keyId, nameof(keyId));
+        return await Require(_authenticationClient, nameof(AuthenticationService)).RevokeApiKeyAsync(
+            new RevokeApiKeyRequest { KeyId = keyId }, cancellationToken: cancellationToken);
     }
 
     public async Task<ListDatabasesResponse> ListDatabasesAsync(CancellationToken cancellationToken = default)

@@ -1,4 +1,5 @@
 @page "/"
+@attribute [Authorize]
 @using System.Text.Json
 @using global::Grpc.Core
 @using NativeDCB.Web.Grpc
@@ -350,6 +351,33 @@ else if (activeService.Name == "Administration")
         </RpcCard>
     </div>
 }
+else if (activeService.Name == "Authentication")
+{
+    <div class="rpc-grid two-up">
+        <RpcCard Title="CreateApiKey" Note="Generate a key once. Save the returned secret before clearing output.">
+            <label>
+                <span>Label</span><input @bind="apiKeyLabel" @bind:event="oninput" placeholder="orders-worker">
+            </label>
+            <label>
+                <span>Permissions <small>one scope per line</small></span>
+                <textarea @bind="apiKeyPermissions" @bind:event="oninput" spellcheck="false"></textarea>
+            </label>
+            <label>
+                <span>Expiry <small>optional ISO-8601</small></span><input @bind="apiKeyExpiresUtc" @bind:event="oninput">
+            </label>
+            <button class="button button-run" @onclick="CreateApiKeyAsync" disabled="@busy">Create key</button>
+        </RpcCard>
+        <RpcCard Title="ListApiKeys / RevokeApiKey" Note="Listings contain metadata only; secrets are never returned again.">
+            <label>
+                <span>Key ID</span><input @bind="apiKeyId" @bind:event="oninput">
+            </label>
+            <div class="button-row">
+                <button class="button button-run" @onclick="ListApiKeysAsync" disabled="@busy">List keys</button>
+                <button class="button button-danger" @onclick="RevokeApiKeyAsync" disabled="@busy">Revoke key</button>
+            </div>
+        </RpcCard>
+    </div>
+}
 else
 {
     <div class="statement-callout">
@@ -462,6 +490,10 @@ else
     private uint partitionNumber;
     private string indexEventType = string.Empty;
     private string indexKeys = string.Empty;
+    private string apiKeyLabel = string.Empty;
+    private string apiKeyPermissions = "grpc:*:*\nhandler:*/*:*\napikey:*:*";
+    private string apiKeyExpiresUtc = string.Empty;
+    private string apiKeyId = string.Empty;
 
     private string ConnectionClass => connectionStatus == "server available"
         ? "online"
@@ -646,6 +678,22 @@ else
     {
         return RunUnaryAsync("Administration.RequestStateRebuild", token =>
             Console.RequestStateRebuildAsync(database, partitionNumber, token));
+    }
+
+    private Task CreateApiKeyAsync()
+    {
+        return RunUnaryAsync("Authentication.CreateApiKey", token =>
+            Console.CreateApiKeyAsync(apiKeyLabel, apiKeyPermissions, apiKeyExpiresUtc, token));
+    }
+
+    private Task ListApiKeysAsync()
+    {
+        return RunUnaryAsync("Authentication.ListApiKeys", Console.ListApiKeysAsync);
+    }
+
+    private Task RevokeApiKeyAsync()
+    {
+        return RunUnaryAsync("Authentication.RevokeApiKey", token => Console.RevokeApiKeyAsync(apiKeyId, token));
     }
 
     private async Task RunUnaryAsync(string rpc, Func<CancellationToken, Task<string>> operation)

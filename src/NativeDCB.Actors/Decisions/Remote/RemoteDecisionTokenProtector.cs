@@ -91,6 +91,23 @@ public sealed class RemoteDecisionTokenProtector
     public TimeSpan Lifetime { get; }
     internal DateTimeOffset UtcNow => _timeProvider.GetUtcNow();
 
+    public bool TryGetAuthorizationResource(
+        ReadOnlySpan<byte> envelope,
+        out string database,
+        out string handlerName)
+    {
+        if (TryUnprotect(envelope, out RemoteDecisionClaimsMessage? claims) && claims is not null)
+        {
+            database = claims.Database;
+            handlerName = claims.HandlerName;
+            return true;
+        }
+
+        database = string.Empty;
+        handlerName = string.Empty;
+        return false;
+    }
+
     internal byte[] Protect(RemoteDecisionClaimsMessage claims)
     {
         if (!IsConfigured || _activeKeyId is null)

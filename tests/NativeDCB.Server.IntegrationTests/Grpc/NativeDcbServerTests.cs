@@ -12,12 +12,14 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 using NativeDCB.Model.Decisions;
 using NativeDCB.Protocol.V1;
 using NativeDCB.Sdk.Client;
 using NativeDCB.Sdk.Decisions.Authoring;
 using NativeDCB.Sdk.Schemas;
+using NativeDCB.Server.Security;
 
 using QueryItem = NativeDCB.Protocol.V1.QueryItem;
 
@@ -1304,7 +1306,9 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
 
     private sealed class ServerFactory(
         string? databaseRoot = null,
-        MutableTimeProvider? timeProvider = null) : WebApplicationFactory<Program>
+        MutableTimeProvider? timeProvider = null,
+        bool authenticationDisabled = true,
+        bool jwtAuthentication = false) : WebApplicationFactory<Program>
     {
         public string DatabaseRoot { get; } = databaseRoot ?? Path.Combine(
             Path.GetTempPath(), "NativeDCB.Server.Tests", Guid.NewGuid().ToString("N"));
@@ -1316,9 +1320,17 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.UseEnvironment("Testing");
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
+                    ["Authentication:Providers"] = jwtAuthentication
+                        ? "JwtBearer"
+                        : authenticationDisabled
+                            ? "Disabled"
+                            : "ApiKey",
+                    ["Authentication:JwtBearer:Authority"] = jwtAuthentication ? JwtIssuer : null,
+                    ["Authentication:JwtBearer:Audience"] = jwtAuthentication ? JwtAudience : null,
                     ["DatabaseRoot"] = DatabaseRoot,
                     ["MaxEventCountPerPartition"] = "3",
                     ["RemoteDecisions:ActiveKeyId"] = "test",
@@ -1327,6 +1339,16 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
                 }));
             builder.ConfigureTestServices(services =>
             {
+                if (authenticationDisabled)
+                {
+                    services.RemoveAll<IValidateOptions<NativeDcbAuthenticationOptions>>();
+                }
+
+                if (jwtAuthentication)
+                {
+                    ConfigureTestJwt(services);
+                }
+
                 services.RemoveAll<TimeProvider>();
                 services.AddSingleton<TimeProvider>(Clock);
             });

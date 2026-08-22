@@ -79,4 +79,10 @@ public interface INativeDcbConsole
 
     Task<string> RequestStateRebuildAsync(string database, uint partitionNumber,
         CancellationToken cancellationToken = default);
+
+    Task<string> CreateApiKeyAsync(string label, string permissions, string expiresUtc,
+        CancellationToken cancellationToken = default);
+
+    Task<string> ListApiKeysAsync(CancellationToken cancellationToken = default);
+    Task<string> RevokeApiKeyAsync(string keyId, CancellationToken cancellationToken = default);
 }

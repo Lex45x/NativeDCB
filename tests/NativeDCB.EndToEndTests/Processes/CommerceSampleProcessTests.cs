@@ -417,6 +417,9 @@ public sealed class CommerceSampleProcessTests
         };
         startInfo.ArgumentList.Add(serverAssembly);
         startInfo.Environment["ASPNETCORE_URLS"] = address;
+        startInfo.Environment["ASPNETCORE_ENVIRONMENT"] = "Testing";
+        startInfo.Environment["DOTNET_ENVIRONMENT"] = "Testing";
+        startInfo.Environment["Authentication__Providers"] = "Disabled";
         startInfo.Environment["DatabaseRoot"] = databaseRoot;
         startInfo.Environment["Orleans__SiloPort"] = siloPort.ToString();
         startInfo.Environment["Orleans__GatewayPort"] = gatewayPort.ToString();
