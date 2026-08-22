@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/docs/">
     <File Path="docs/actor-architecture.md" />
+    <File Path="docs/authentication-authorization.md" />
     <File Path="docs/benchmarking.md" />
     <File Path="docs/cli.md" />
     <File Path="docs/commerce-domain.md" />

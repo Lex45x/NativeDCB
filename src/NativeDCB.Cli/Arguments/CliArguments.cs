@@ -197,7 +197,10 @@ internal sealed class CliArguments
 
     public void EnsureAllowed(params string[] commandOptions)
     {
-        HashSet<string> allowed = new(commandOptions, StringComparer.Ordinal) { "help", "server" };
+        HashSet<string> allowed = new(commandOptions, StringComparer.Ordinal)
+        {
+            "access-token-file", "api-key-file", "help", "server"
+        };
         foreach (string option in _options.Keys)
         {
             if (!allowed.Contains(option))

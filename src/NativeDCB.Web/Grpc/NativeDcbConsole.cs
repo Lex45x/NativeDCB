@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -15,6 +16,7 @@ public sealed class NativeDcbConsole : INativeDcbConsole
     private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
 
     private readonly AdministrationService.AdministrationServiceClient _administration;
+    private readonly AuthenticationService.AuthenticationServiceClient _authentication;
     private readonly CatalogService.CatalogServiceClient _catalog;
     private readonly CommandService.CommandServiceClient _command;
     private readonly DatabaseService.DatabaseServiceClient _database;
@@ -30,6 +32,7 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         _event = new EventService.EventServiceClient(channel);
         _statement = new StatementService.StatementServiceClient(channel);
         _administration = new AdministrationService.AdministrationServiceClient(channel);
+        _authentication = new AuthenticationService.AuthenticationServiceClient(channel);
     }
 
     public Task<string> ListDatabasesAsync(CancellationToken cancellationToken = default)
@@ -463,6 +466,41 @@ public sealed class NativeDcbConsole : INativeDcbConsole
                 Database = Required(database, nameof(database)),
                 PartitionNumber = partitionNumber
             },
+            cancellationToken: cancellationToken));
+    }
+
+    public Task<string> CreateApiKeyAsync(
+        string label,
+        string permissions,
+        string expiresUtc,
+        CancellationToken cancellationToken = default)
+    {
+        CreateApiKeyRequest request = new() { Label = Required(label, nameof(label)) };
+        request.Permissions.AddRange(permissions.Split([',', '\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        if (!string.IsNullOrWhiteSpace(expiresUtc))
+        {
+            if (!DateTimeOffset.TryParse(expiresUtc, out DateTimeOffset expiry))
+            {
+                throw new ArgumentException("Expiry must be an ISO-8601 timestamp.", nameof(expiresUtc));
+            }
+
+            request.ExpiresUtc = Timestamp.FromDateTimeOffset(expiry);
+        }
+
+        return UnaryAsync(_authentication.CreateApiKeyAsync(request, cancellationToken: cancellationToken));
+    }
+
+    public Task<string> ListApiKeysAsync(CancellationToken cancellationToken = default)
+    {
+        return UnaryAsync(_authentication.ListApiKeysAsync(
+            new ListApiKeysRequest(), cancellationToken: cancellationToken));
+    }
+
+    public Task<string> RevokeApiKeyAsync(string keyId, CancellationToken cancellationToken = default)
+    {
+        return UnaryAsync(_authentication.RevokeApiKeyAsync(
+            new RevokeApiKeyRequest { KeyId = Required(keyId, nameof(keyId)) },
             cancellationToken: cancellationToken));
     }
 

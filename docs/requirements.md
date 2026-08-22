@@ -1,7 +1,7 @@
 # NativeDCB Requirements
 
 Status: requirements reconciled with the current implementation  
-Last verified: 2026-08-19
+Last verified: 2026-08-22
 
 ## Purpose
 
@@ -30,11 +30,12 @@ This document does not remove unmet requirements. Each area is marked **Implemen
 | Read availability without writer ownership | Partial | Finite range reads, command-ID reconciliation, eventual-query fallbacks, index administration boundaries, and range-follow polling recover a committed head from shared partitions without opening Main. Authoritative query reads/subscriptions, mutations, state administration, and `GetHead` open Main; concurrent in-process activation/recovery has no separately specified synchronization guarantee. |
 | Buffered/grouped flush and pending reservations | Not implemented | Each append writes and flushes one batch under serialized writer access. |
 | Multi-silo deployment | Not implemented | Server uses `UseLocalhostClustering`; filesystem coordination is single-process. |
-| Native gRPC and browser gRPC-Web transports | Implemented | All six services expose both transports; browser origins come from `GrpcWeb:AllowedOrigins`. |
-| Actor-only database access and orchestration | Implemented | All 31 RPCs route database operations through `NativeDCB.Actors`; gRPC performs protocol validation/mapping and stream bridging. See [Actor Architecture](actor-architecture.md). |
+| Native gRPC and browser gRPC-Web transports | Implemented | All seven services expose both transports; browser origins come from `GrpcWeb:AllowedOrigins`. |
+| Actor-only database access and orchestration | Implemented | All 31 database-operation RPCs route work through `NativeDCB.Actors`; the three authentication RPCs manage server security state. See [Actor Architecture](actor-architecture.md). |
 | Dedicated persistent-file ownership | Implemented | Main owns the event log, Schema owns `schemas_v1.json`, Handler owns `handlers_v1.json`, each Index actor owns one manifest/generation set, and each State actor owns one state file. |
 | Replicable index reads | Implemented | One Index actor per logical identity publishes write-once generations consumed by stateless Index Replica and Index Orchestrator actors. |
-| Security, audit, observability, backup/restore | Not implemented | Remote capabilities are HMAC-authenticated bearer values, but there is no caller authentication, authorization, audit sink, metrics/tracing, backup, or restore facility. |
+| Caller authentication and authorization | Implemented | External OIDC/JWTs, generated API keys, exact/wildcard gRPC permissions, handler resource scopes, non-escalating key delegation, bootstrap/recovery, and anonymous liveness/readiness probes. |
+| Audit, observability, backup/restore | Not implemented | There is no audit sink, production metrics/tracing setup, backup, or restore facility. |
 
 ## Core Invariants
 
@@ -126,9 +127,9 @@ State files and indexes are not authoritative. A state file accelerates writer r
 
 ## Public Surface
 
-The implemented public protocol has Database, Catalog, Command, Event, Statement, and Administration services with 31 RPCs in total. CommandService has four methods: `ExecuteHandler`, `PrepareDecision`, `CompleteDecision`, and `GetEventsByCommandId`. All six services support native HTTP/2 gRPC and gRPC-Web. `NativeDcbClient` wraps every RPC while retaining a legacy constructor that exposes only its former Command/Event/Catalog subset. The native CLI and standalone Blazor WebAssembly console each expose the full 31-RPC surface; Web calls the server directly and has no BFF. Server integration covers a full SDK flow, remote decisions, and browser-style gRPC-Web unary and streaming calls, while process-level end-to-end coverage launches a real server against temporary storage. Committed event reads expose only committed events; remote preparation additionally returns hydrated model JSON and an opaque signed capability. Domain rejection and invalid command execution are command response outcomes; routing, lifecycle, data-loss, and infrastructure failures use gRPC status codes with protobuf `ErrorDetail` in the `native-dcb-error-bin` binary trailer. See [gRPC API](grpc-api.md) and [CLI](cli.md).
+The implemented public protocol has Database, Catalog, Command, Event, Statement, Administration, and Authentication services with 34 RPCs in total. CommandService has four methods: `ExecuteHandler`, `PrepareDecision`, `CompleteDecision`, and `GetEventsByCommandId`; AuthenticationService creates, lists, and revokes generated API keys. All seven services support native HTTP/2 gRPC and gRPC-Web. `NativeDcbClient` and the native CLI wrap every RPC, and the standalone Blazor WebAssembly console exposes the full 34-RPC surface without a BFF. Server integration covers a full SDK flow, remote decisions, browser-style gRPC-Web calls, real JWT/API-key validation, and fine-grained authorization, while process-level end-to-end coverage launches a real server against temporary storage. Committed event reads expose only committed events; remote preparation additionally returns hydrated model JSON and an opaque signed capability. Domain rejection and invalid command execution are command response outcomes; routing, lifecycle, authentication, authorization, data-loss, and infrastructure failures use gRPC status codes with protobuf `ErrorDetail` in the `native-dcb-error-bin` binary trailer. See [gRPC API](grpc-api.md) and [CLI](cli.md).
 
-The browser endpoint in `NativeDCB.Web/wwwroot/appsettings.json` is public configuration. `GrpcWeb:AllowedOrigins` controls which origins browsers permit to read cross-origin responses, but CORS does not authenticate callers or authorize operations. No secrets belong in Web static assets, and the unauthenticated server and console must not be exposed to untrusted networks.
+The browser endpoint and OIDC authority/client/scopes in `NativeDCB.Web/wwwroot/appsettings.json` are public configuration. `GrpcWeb:AllowedOrigins` controls which origins browsers permit to read cross-origin responses, but CORS does not authenticate callers or authorize operations. No credentials, API keys, or client secrets belong in Web static assets.
 
 ## Scope Boundaries
 
@@ -143,7 +144,7 @@ The original design still identifies useful future work, but it must not be assu
 - define and test explicit synchronization guarantees for snapshot reads that overlap in-process writer activation/recovery
 - define production durability guarantees per filesystem
 - add size/backpressure limits for records, batches, requests, and full-event indexes
-- add authenticated authorization, audit records, metrics/tracing, backup/restore, repair tooling, and operational restart policy
+- add audit records, metrics/tracing, backup/restore, repair tooling, and operational restart policy
 - define schema evolution/upcasting and compatibility/version policy
 - support multi-silo topology only with a safe shared-storage coordination design
 
@@ -153,5 +154,6 @@ The original design still identifies useful future work, but it must not be assu
 - [Internal Engine](internal-engine.md)
 - [Database Lifecycle](database-lifecycle.md)
 - [NativeDCB gRPC API](grpc-api.md)
+- [Authentication and authorization](authentication-authorization.md)
 - [NativeDCB Decision Language](dsl.md)
 - [NativeDCB .NET SDK](dotnet-sdk.md)

@@ -29,6 +29,7 @@ internal static class Program
         }
 
         using CancellationTokenSource shutdown = new();
+        // ReSharper disable once AccessToDisposedClosure -- The handler is removed before shutdown is disposed.
         ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
         {
             eventArgs.Cancel = true;
@@ -38,7 +39,10 @@ internal static class Program
 
         try
         {
-            using NativeDcbClient client = new(address);
+            NativeDcbCredentials? credentials = CredentialsFromEnvironment();
+            using NativeDcbClient client = credentials is null
+                ? new NativeDcbClient(address)
+                : new NativeDcbClient(address, credentials);
             await CommerceSeeder.SeedAsync(client, database, shutdown.Token);
             Console.WriteLine($"Catalog ready in database '{database}'.");
 
@@ -66,6 +70,22 @@ internal static class Program
         {
             Console.CancelKeyPress -= cancelHandler;
         }
+    }
+
+    private static NativeDcbCredentials? CredentialsFromEnvironment()
+    {
+        string? accessToken = Environment.GetEnvironmentVariable("NATIVEDCB_ACCESS_TOKEN");
+        string? apiKey = Environment.GetEnvironmentVariable("NATIVEDCB_API_KEY");
+        if (!string.IsNullOrWhiteSpace(accessToken) && !string.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new InvalidOperationException("Configure either NATIVEDCB_ACCESS_TOKEN or NATIVEDCB_API_KEY, not both.");
+        }
+
+        return !string.IsNullOrWhiteSpace(accessToken)
+            ? NativeDcbCredentials.BearerToken(accessToken)
+            : !string.IsNullOrWhiteSpace(apiKey)
+                ? NativeDcbCredentials.ApiKey(apiKey)
+                : null;
     }
 
     private static async Task RunLifecycleAsync(

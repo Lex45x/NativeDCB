@@ -6,11 +6,13 @@ internal static class HelpText
                                NativeDCB CLI - all NativeDCB v1 RPCs
 
                                Usage:
-                                 nativedcb [--server URL] <group> <command> [options]
+                                 nativedcb [--server URL] [--access-token-file PATH | --api-key-file PATH] <group> <command> [options]
                                  nativedcb <group> <command> --help
 
-                               Global option:
+                               Global options:
                                  --server URL  gRPC endpoint (default: NATIVEDCB_SERVER or http://localhost:5010)
+                                 --access-token-file PATH  Read an OIDC token (or use NATIVEDCB_ACCESS_TOKEN)
+                                 --api-key-file PATH       Read an API key (or use NATIVEDCB_API_KEY)
 
                                Commands (RPC):
                                  database list                         DatabaseService.ListDatabases
@@ -44,6 +46,9 @@ internal static class HelpText
                                  admin state-file-status               AdministrationService.GetStateFileStatus
                                  admin rebuild-index                   AdministrationService.RequestIndexRebuild
                                  admin rebuild-state                   AdministrationService.RequestStateRebuild
+                                 auth create-api-key                   AuthenticationService.CreateApiKey
+                                 auth list-api-keys                    AuthenticationService.ListApiKeys
+                                 auth revoke-api-key                   AuthenticationService.RevokeApiKey
 
                                Input conventions:
                                  JSON: --schema JSON | --schema-file PATH | --schema-stdin (similarly command, plan, query)
@@ -146,7 +151,11 @@ internal static class HelpText
         ["admin rebuild-index"] =
             "Usage: nativedcb admin rebuild-index --database NAME --event-type TYPE [--key name=value]",
         ["admin rebuild-state"] =
-            "Usage: nativedcb admin rebuild-state --database NAME --partition NUMBER"
+            "Usage: nativedcb admin rebuild-state --database NAME --partition NUMBER",
+        ["auth create-api-key"] =
+            "Usage: nativedcb auth create-api-key --label TEXT --permission SCOPE [--permission SCOPE ...] [--expires ISO-8601]",
+        ["auth list-api-keys"] = "Usage: nativedcb auth list-api-keys",
+        ["auth revoke-api-key"] = "Usage: nativedcb auth revoke-api-key --key-id ID"
     };
 
     public static bool TryGetCommand(string command, out string text)

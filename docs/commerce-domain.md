@@ -21,7 +21,7 @@ The domain is intentionally broader than a minimal demonstration. It covers cata
 
 - The domain is not a production commerce reference architecture.
 - Entity identifiers do not define event streams or aggregate partitions.
-- The sample does not implement authentication, authorization, taxation, accounting, fraud detection, or external gateway reliability.
+- The commerce domain does not model identity or authorization policy; the sample process passes server credentials from its environment. It also does not implement taxation, accounting, fraud detection, or external gateway reliability.
 - Benchmark workflows do not claim distributed transactions or multi-silo support.
 - Remote completion is not treated as server-side enforcement of an external worker's business policy.
 

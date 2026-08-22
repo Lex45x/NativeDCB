@@ -1,7 +1,7 @@
 # NativeDCB CLI
 
-Status: implemented 31-RPC native gRPC client reference
-Last verified: 2026-08-21
+Status: implemented 34-RPC native gRPC client reference
+Last verified: 2026-08-22
 
 ## Build And Run
 
@@ -20,7 +20,7 @@ dotnet run --project src\NativeDCB.Cli -- database list
 
 The built executable is named `nativedcb` (`nativedcb.exe` on Windows). Examples below use `dotnet run` so they do not depend on an installation or `PATH` entry.
 
-The CLI is a native gRPC client and covers all 31 RPCs in `nativedcb.v1`. Start `NativeDCB.Server` first. Its native HTTP/2 launch endpoint is `http://localhost:5010`; gRPC-Web is for browser clients and is not needed by the CLI.
+The CLI is a native gRPC client and covers all 34 RPCs in `nativedcb.v1`. Start `NativeDCB.Server` first. Its native HTTP/2 launch endpoint is `http://localhost:5010`; gRPC-Web is for browser clients and is not needed by the CLI.
 
 ## Server Selection
 
@@ -40,6 +40,23 @@ dotnet run --project src\NativeDCB.Cli -- database health --server https://local
 ```
 
 HTTPS requires the server certificate to be trusted by the machine running the CLI.
+
+## Credentials
+
+Every RPC requires authentication unless the server explicitly runs with authentication disabled. Configure exactly one credential:
+
+1. `--access-token-file PATH`, then `NATIVEDCB_ACCESS_TOKEN`
+2. `--api-key-file PATH`, then `NATIVEDCB_API_KEY`
+
+File options take precedence over the corresponding environment variables. The CLI trims surrounding whitespace and adds `Authorization: Bearer <token>` or `Authorization: ApiKey <key>` when each RPC starts. Inline credential arguments are intentionally unsupported so secrets do not appear in shell history or process listings.
+
+```powershell
+$env:NATIVEDCB_API_KEY = "<API key>"
+dotnet run --project src\NativeDCB.Cli -- database health
+
+dotnet run --project src\NativeDCB.Cli -- `
+  --access-token-file .\access-token.txt database list
+```
 
 ## Commands
 
@@ -116,6 +133,16 @@ NDL uses `--ndl TEXT`, `--ndl-file PATH`, or `--ndl-stdin`.
 | `admin rebuild-index` | `--database NAME --event-type TYPE`, optional repeatable `--key name=value` |
 | `admin rebuild-state` | `--database NAME --partition NUMBER` |
 
+### AuthenticationService (3)
+
+| Command | Inputs |
+|---|---|
+| `auth create-api-key` | `--label TEXT`, repeatable `--permission SCOPE`, optional `--expires ISO-8601` |
+| `auth list-api-keys` | None. |
+| `auth revoke-api-key` | `--key-id ID` |
+
+`create-api-key` returns the generated credential only in its creation response; listing and revocation return metadata without the secret. The server rejects grants that exceed the caller's own permissions. Store the returned key in an appropriate secret store and remove redirected response files after use.
+
 ## Input Conventions
 
 ### JSON And NDL
@@ -181,7 +208,7 @@ Unary success writes one compact protobuf JSON object followed by a newline to s
 | `69` | Server unavailable or deadline exceeded. |
 | `70` | Other RPC status or unexpected software error. |
 | `74` | File or standard-input I/O error. |
-| `77` | Unauthenticated or permission-denied RPC status. Authentication is not implemented by the current server. |
+| `77` | Unauthenticated or permission-denied RPC status. |
 | `130` | Cancelled, including `Ctrl+C`. |
 
 For streaming commands, response lines can be emitted before a later unsuccessful completion or transport error determines the final nonzero exit code.

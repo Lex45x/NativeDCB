@@ -1,7 +1,7 @@
 # NativeDCB Solution Structure
 
 Status: implementation reference with future work called out explicitly  
-Last verified: 2026-08-21
+Last verified: 2026-08-22
 
 ## Repository
 
@@ -55,7 +55,7 @@ Files are grouped physically under `Catalog`, `Databases`, `Events`, `Queries`, 
 
 ### `NativeDCB.Protocol`
 
-`Protos/v1/nativedcb.proto` is the single versioned protobuf source. The build generates both clients and server bases in `NativeDCB.Protocol.V1`. It contains all six public services and 31 RPCs; CommandService has `ExecuteHandler`, `PrepareDecision`, `CompleteDecision`, and `GetEventsByCommandId`. Generated C# is build output.
+`Protos/v1/nativedcb.proto` is the single versioned protobuf source. The build generates both clients and server bases in `NativeDCB.Protocol.V1`. It contains all seven public services and 34 RPCs; CommandService has `ExecuteHandler`, `PrepareDecision`, `CompleteDecision`, and `GetEventsByCommandId`, and AuthenticationService creates, lists, and revokes API keys. Generated C# is build output.
 
 ### `NativeDCB.Ndl`
 
@@ -77,19 +77,21 @@ Files are grouped under `Contracts`, `Messages`, `Grains`, `Catalog`, `Decisions
 
 ### `NativeDCB.Server`
 
-The ASP.NET Core server hosts an Orleans localhost cluster and all generated gRPC service implementations. It maps protocol messages to actor messages, propagates cancellation, maps actor results, bridges streaming responses, and exposes HTTP liveness/readiness endpoints. All 31 RPCs enter actors for database operations. All six services support native HTTP/2 gRPC and gRPC-Web; cross-origin browser access is restricted by `GrpcWeb:AllowedOrigins`.
+The ASP.NET Core server hosts an Orleans localhost cluster and all generated gRPC service implementations. It maps protocol messages to actor messages, propagates cancellation, maps actor results, bridges streaming responses, and exposes HTTP liveness/readiness endpoints. All 31 database-operation RPCs enter actors; the three authentication RPCs manage the server-owned API-key catalog. All seven services support native HTTP/2 gRPC and gRPC-Web; cross-origin browser access is restricted by `GrpcWeb:AllowedOrigins`.
+
+The server security layer validates OIDC/JWTs and generated API keys, authorizes every gRPC action, enforces database/handler resource permissions where applicable, and owns bootstrap/recovery and the versioned API-key store under `Security`.
 
 The server has no Transaction grain, database registry, catalog store, or direct event/index/state storage path. There are no generic public-service facade actors: each gRPC method calls the actor responsible for the operation, and domain actors orchestrate workflows that span owners. See [Actor Architecture](actor-architecture.md).
 
 ### `NativeDCB.Sdk`
 
-The runtime SDK provides schema attributes and reflection descriptors, JSON Schema generation, consistency-key encoding, the typed fluent decision builder and plan compiler, typed prepared-model and proposed-event helpers, request builders/mappers, and a gRPC client wrapping every RPC across Database, Catalog, Command, Event, Statement, and Administration services. Its NuGet package embeds the analyzer and generator DLLs as standard C# analyzer assets.
+The runtime SDK provides schema attributes and reflection descriptors, JSON Schema generation, consistency-key encoding, the typed fluent decision builder and plan compiler, typed prepared-model and proposed-event helpers, request builders/mappers, refresh-capable bearer/API-key call credentials, and a gRPC client wrapping every RPC across all seven services. Its NuGet package embeds the analyzer and generator DLLs as standard C# analyzer assets.
 
 SDK files are grouped physically under `Schemas`, `Decisions/Authoring`, `Decisions/Compilation`, `Decisions/Diagnostics`, and `Client`.
 
 ### `NativeDCB.Cli`
 
-The `nativedcb` console application is a native gRPC client for all 31 RPCs. It supports JSON and NDL from command arguments, files, or standard input; remote prepare/complete inputs; query/key convenience inputs; JSON/JSONL output; streaming cancellation; and stable process exit codes. It defaults to the native HTTP/2 endpoint `http://localhost:5010`. See [CLI](cli.md).
+The `nativedcb` console application is a native gRPC client for all 34 RPCs. It supports access-token/API-key files and environment variables, API-key management, JSON and NDL from command arguments, files, or standard input, remote prepare/complete inputs, query/key convenience inputs, JSON/JSONL output, streaming cancellation, and stable process exit codes. It defaults to the native HTTP/2 endpoint `http://localhost:5010`. See [CLI](cli.md).
 
 CLI implementation files are grouped under `Application`, `Arguments`, `IO`, and `Presentation`, with `Program.cs` remaining at the project root.
 
@@ -104,17 +106,17 @@ These are separate `netstandard2.0` Roslyn projects. Each packs its DLL under `a
 
 The web console is a standalone Blazor WebAssembly application. It references only the public protocol, runs inside the browser's WebAssembly runtime boundary, and calls the NativeDCB server directly over gRPC-Web. There is no server-side application host or backend-for-frontend in this project; the development host only serves the static WebAssembly assets.
 
-Its single-page RPC workbench has explicit controls for all 31 methods across the six services, including remote decision preparation and completion. Navigation, method counts, request/response type metadata, and missing-wrapper detection are derived from generated protobuf descriptors; domain-heavy forms remain hand-authored. The prominent NDL editor drives validation, explanation, and streamed statement execution. Event reads, follow mode, subscriptions, and statement execution render stream items incrementally, and the active unary call or stream can be cancelled.
+Its single-page RPC workbench has explicit controls for all 34 methods across the seven services, including API-key management and remote decision preparation/completion. Navigation, method counts, request/response type metadata, and missing-wrapper detection are derived from generated protobuf descriptors; domain-heavy forms remain hand-authored. The prominent NDL editor drives validation, explanation, and streamed statement execution. Event reads, follow mode, subscriptions, and statement execution render stream items incrementally, and the active unary call or stream can be cancelled.
 
 The browser gRPC facade is under `Grpc`, descriptor discovery is nested under `Grpc/Discovery`, and Razor components retain their existing `Components/Layout` and `Components/Pages` grouping.
 
-`wwwroot/appsettings.json` is public browser configuration and defaults `NativeDCB:ServerAddress` to `https://localhost:7154`. Browser origins must also be present in the server's `GrpcWeb:AllowedOrigins`; the defaults cover the Web project's HTTP and HTTPS launch origins. This CORS allowlist does not provide authentication. The application does not persist operator history, consume external logs, authenticate users, or access database files directly.
+`wwwroot/appsettings.json` is public browser configuration and defaults `NativeDCB:ServerAddress` to `https://localhost:7154`. Browser origins must also be present in the server's `GrpcWeb:AllowedOrigins`; the defaults cover the Web project's HTTP and HTTPS launch origins. This CORS allowlist does not provide authentication. The application uses OIDC authorization-code flow with PKCE and does not persist operator history, consume external logs, store credentials in static configuration, or access database files directly.
 
 ### Benchmark Executables
 
 `NativeDCB.MicroBenchmarks` uses BenchmarkDotNet for eight deterministic CPU/allocation classes and five isolated filesystem classes covering queries, schemas, mapping, NDL/SDK compilation, pure decision/index kernels, append, recovery, partition reads, index persistence, and state generation. Filesystem runs require an explicit `NATIVEDCB_BENCHMARK_ROOT` and report the selected storage environment.
 
-`NativeDCB.SystemBenchmarks` uses NBomber plus a repository-owned coordinator. It launches a real Release server with fresh ports and storage, seeds Native Commerce, runs one of 12 independently selectable scenarios through closed-loop, planned open-loop, synchronized-burst, or correlated-workflow scheduling, verifies persisted history, samples the child process, and writes a versioned result bundle. Optional profiling attaches `dotnet-counters`, `dotnet-trace`, or `dotnet-gcdump` to the server PID.
+`NativeDCB.SystemBenchmarks` uses NBomber plus a repository-owned coordinator. It launches a real Release server with fresh ports and storage under explicit disabled-authentication test configuration, seeds Native Commerce, runs one of 12 independently selectable scenarios through closed-loop, planned open-loop, synchronized-burst, or correlated-workflow scheduling, verifies persisted history, samples the child process, and writes a versioned result bundle. Optional profiling attaches `dotnet-counters`, `dotnet-trace`, or `dotnet-gcdump` to the server PID.
 
 ## Dependency Direction
 
@@ -154,7 +156,7 @@ There is no Web BFF or proxy boundary. External .NET applications can use `Nativ
 - Engine tests cover durable NDJSON, query/append semantics, writer locking, partition rollover, recovery/truncation/corruption, state checkpoint construction/restore/validation/fallback, and equivalence coverage for the pure decision-model and index-combination benchmark seams.
 - SDK tests cover attributes/descriptors, deterministic tags, fluent type states, query translation, plan compilation, and protocol mapping.
 - Analyzer/generator tests cover current diagnostics and deterministic factory generation.
-- Server integration tests start the ASP.NET/Orleans host with a temporary root and cover database creation, catalog persistence, commands, retries, reads/follow, schemas, indexes, state files, lock failure with snapshot-read availability, multi-decision NDL statements, SDK plans, remote prepare/complete behavior, restart, and a full SDK flow across all six protocol services. Native Commerce coverage adds deterministic fixtures, idempotent catalog seeding, a complete ordered lifecycle, contention, duplicate reconciliation, typed remote payment completion, stale capabilities, and durable restart. A dedicated gRPC-Web integration test exercises browser-style unary and server-streaming calls through the configured CORS origin.
+- Server integration tests start the ASP.NET/Orleans host with a temporary root and cover database creation, catalog persistence, commands, retries, reads/follow, schemas, indexes, state files, lock failure with snapshot-read availability, multi-decision NDL statements, SDK plans, remote prepare/complete behavior, restart, and a full SDK flow. Authentication coverage exercises real JWT/API-key validation, wildcard and handler permissions, delegation, bootstrap/recovery, SDK propagation, and the 34-method gRPC-Web catalog. Native Commerce coverage adds deterministic fixtures, idempotent catalog seeding, a complete ordered lifecycle, contention, duplicate reconciliation, typed remote payment completion, stale capabilities, and durable restart.
 - The end-to-end project has an in-process authoring-equivalence test and a Commerce process E2E test, `CommerceSampleProcessTests`, that launches the built server on isolated ports with a temporary database root. The process test runs the Commerce sample's idempotent seeder twice, verifies the complete catalog at head zero, subscribes, executes `PublishProduct` through NDL and fluent SDK handlers, completes and replays a remote SDK decision, and verifies streamed and persisted events through the real transport and storage path.
 - `samples/Commerce/NativeDCB.Commerce` provides the 21 command and 26 event contracts, generated schemas, the 21 decisions in `NativeCommerce.ndl`, three fluent SDK decisions, typed preparation models, deterministic fixtures, and the idempotent catalog seeder for Native Commerce. It is the repository consumer of both Roslyn analyzer projects and the generated schema factory.
 - `samples/Commerce/NativeDCB.Commerce.Sample` is the sole sample application and exposes `seed`, `run`, `contention`, `remote-payment`, and `recovery` modes. Every mode seeds first; the scenarios execute a complete commerce lifecycle, verify domain invariants under contention, demonstrate trusted remote payment completion, and reconcile duplicate commands.
@@ -168,6 +170,6 @@ Test files mirror the corresponding physical production areas where useful, whil
 
 ## Not Yet Implemented
 
-The current structure does not contain authentication/authorization, audit persistence, production metrics/tracing setup, multi-silo storage coordination, backup/restore, compaction/retention, grouped write buffering, model-only plans, or package publishing/release infrastructure. Packages can be built locally, but no automated publication or signed release pipeline is configured.
+The current structure does not contain audit persistence, production metrics/tracing setup, multi-silo storage coordination, backup/restore, compaction/retention, grouped write buffering, model-only plans, or package publishing/release infrastructure. Packages can be built locally, but no automated publication or signed release pipeline is configured.
 
 See [Requirements](requirements.md) for the requirement status matrix and [Database Lifecycle](database-lifecycle.md) for exact operational behavior.

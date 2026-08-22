@@ -7,7 +7,7 @@ public sealed class WebRpcCatalogTests
     [Fact]
     public void WebConsoleWrapsEveryMethodDiscoveredFromTheProtocol()
     {
-        Assert.Equal(expected: 31, RpcCatalog.Services.Sum(service => service.Methods.Count));
+        Assert.Equal(expected: 34, RpcCatalog.Services.Sum(service => service.Methods.Count));
         Assert.Empty(RpcCatalog.MissingConsoleMethods);
     }
 }

@@ -66,6 +66,9 @@ internal sealed class ServerProcess : IAsyncDisposable
             };
             start.ArgumentList.Add(ServerAssembly);
             start.Environment["ASPNETCORE_URLS"] = Address;
+            start.Environment["ASPNETCORE_ENVIRONMENT"] = "Testing";
+            start.Environment["DOTNET_ENVIRONMENT"] = "Testing";
+            start.Environment["Authentication__Providers"] = "Disabled";
             start.Environment["DatabaseRoot"] = DatabaseRoot;
             start.Environment["MaxEventCountPerPartition"] = _options.PartitionLimit.ToString();
             start.Environment["Orleans__SiloPort"] = SiloPort.ToString();

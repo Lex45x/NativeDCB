@@ -1,7 +1,7 @@
 # NativeDCB gRPC API
 
 Status: implemented `nativedcb.v1` protocol reference  
-Last verified: 2026-08-19
+Last verified: 2026-08-22
 
 ## Contract
 
@@ -11,19 +11,21 @@ Queries contain ORed items. Event types in an item are ORed; all keys in an item
 
 ## Transports And Clients
 
-Every RPC in all six services is available over both transports:
+Every RPC in all seven services is available over both transports:
 
 - Native gRPC over HTTP/2 is the transport for the .NET SDK, CLI, sample, and other non-browser generated clients. The default native endpoint is `http://localhost:5010`.
-- gRPC-Web is enabled on all six mapped services for browser clients. The server's `https` launch profile exposes `https://localhost:7154` as well as the native `http://localhost:5010` endpoint.
+- gRPC-Web is enabled on all seven mapped services for browser clients. The server's `https` launch profile exposes `https://localhost:7154` as well as the native `http://localhost:5010` endpoint.
 
-The server reads browser origins from `GrpcWeb:AllowedOrigins` and exposes the gRPC status/error headers required by the client. Its defaults allow `http://localhost:5094` and `https://localhost:7229`, matching the Web launch profiles. A different static host origin must be added explicitly. CORS is enforced by browsers and is not an authentication or authorization boundary; the current server implements neither and must not be exposed to untrusted networks.
+The server reads browser origins from `GrpcWeb:AllowedOrigins` and exposes the gRPC status/error headers required by the client. Its defaults allow `http://localhost:5094` and `https://localhost:7229`, matching the Web launch profiles. A different static host origin must be added explicitly. CORS is enforced by browsers and is independent of the server's JWT/API-key authentication and scoped authorization.
 
-The repository has two operator clients with the complete 31-RPC surface:
+The repository has two operator clients with the complete 34-RPC surface:
 
 - `NativeDCB.Cli` maps one command to every RPC and uses native gRPC. See [CLI](cli.md).
 - `NativeDCB.Web` is a standalone Blazor WebAssembly application with explicit controls for every RPC, direct gRPC-Web calls, incremental stream output and cancellation, and a prominent NDL editor. It has no BFF.
 
-The browser's `NativeDCB:ServerAddress` is public static configuration in `src/NativeDCB.Web/wwwroot/appsettings.json` and defaults to `https://localhost:7154`; it must never contain secrets. The .NET `NativeDcbClient` also wraps every RPC for application use over native gRPC.
+The browser's `NativeDCB:ServerAddress` and public OIDC client settings are static configuration in `src/NativeDCB.Web/wwwroot/appsettings.json` and default to `https://localhost:7154`; they must never contain credentials or a client secret. The .NET `NativeDcbClient` also wraps every RPC for application use over native gRPC and can add a refreshed bearer token or API key per call.
+
+All gRPC methods require a credential and their derived `grpc:<service>:<method>` permission. Handler-sensitive catalog, command, and statement operations additionally require canonical `handler:<database>/<handler>:<action>` permissions. See [Authentication And Authorization](authentication-authorization.md) for the complete permission table and configuration.
 
 ## DatabaseService
 
@@ -36,7 +38,7 @@ The browser's `NativeDCB:ServerAddress` is public static configuration in `src/N
 | `GetCapabilities` | Returns protocol/NDL `v1`, file format `1`, query features `range`, `type`, `keys`, `committed-scan`, subscriptions enabled, and the configured `MaxEventCountPerPartition` limit. |
 | `GetHead` | Lazily opens/recovers the database and returns the Main Writer committed head. |
 
-The server also exposes HTTP `GET /health/live` (`200`, `{live:true}`) and `GET /health/ready`. Readiness asks Database Directory for filesystem-discovered databases and is `200` only when every Main status is `Ready` or `Discovered`; otherwise it is `503`. An empty root is ready.
+The server also exposes anonymous HTTP `GET /health/live` (`200`, `{live:true}`) and `GET /health/ready`. Readiness asks Database Directory for filesystem-discovered databases and is `200` only when every Main status is `Ready` or `Discovered` and no bootstrap API key remains active; otherwise it is `503`. An empty database root is ready only after API-key bootstrap has been replaced or when bootstrap readiness does not apply.
 
 ## CatalogService
 
@@ -163,6 +165,16 @@ It does **not** execute event reads, commands, schema statements, or administrat
 
 Index rebuild acceptance follows completion of the awaited actor calls, though each Index actor records derived-file faults in status rather than failing the RPC. State rebuild acceptance confirms one-way dispatch, not completion; poll status to observe it.
 
+## AuthenticationService
+
+| RPC | Implemented behavior |
+|---|---|
+| `CreateApiKey` | Validates one or more permission grants, prevents delegation beyond the caller's permissions, optionally applies an expiry, stores only the credential digest, and returns the generated key exactly once. Creating the first normal key atomically revokes an active bootstrap key. |
+| `ListApiKeys` | Returns key identifiers, labels, permissions, creation/expiry/revocation times, and bootstrap flags without credential secrets. |
+| `RevokeApiKey` | Atomically records revocation for the requested key identifier and returns its non-secret metadata. |
+
+These methods require their gRPC action permission plus `apikey:*:create`, `apikey:*:list`, or `apikey:<key-id>:revoke`, respectively. They return `FAILED_PRECONDITION` when the API-key provider is disabled.
+
 ## Error Model
 
 Normal command-domain outcomes stay in `ExecuteHandlerResponse`. The implemented transport mapping is:
@@ -173,6 +185,8 @@ Normal command-domain outcomes stay in `ExecuteHandlerResponse`. The implemented
 | `NOT_FOUND` | Database, handler, schema, command ID, or partition not found. |
 | `ALREADY_EXISTS` | Database directory already exists. |
 | `FAILED_PRECONDITION` | State rebuild requested for the active or future partition; `PrepareDecision` or `CompleteDecision` called while `RemoteDecisions` is absent or invalid. |
+| `UNAUTHENTICATED` | Missing, malformed, unknown, expired, or revoked caller credential. |
+| `PERMISSION_DENIED` | Authenticated caller lacks an action/resource permission or attempts to delegate a permission it does not possess. |
 | `UNAVAILABLE` | Database not write-available, writer lock contention, event-store fault, I/O, or access failure. |
 | `DATA_LOSS` | Invalid/corrupt authoritative metadata or partition data. |
 | `INTERNAL` | Sanitized fallback for an unexpected service exception; the original exception is logged server-side. |
@@ -184,4 +198,4 @@ Every transport `RpcException` created by `ProtocolMapper` carries a serialized 
 
 ## Not Implemented
 
-Authentication/authorization, audit records, external statement history, pagination, protocol negotiation, configurable message limits, durable subscriptions, remote-decision retry orchestration, server retry hints, and standard `google.rpc.Status` details are future work. Remote preparation currently requires a normal executable handler plan with emissions; model-only plans remain separate future work and are not implemented by these RPCs.
+Audit records, external statement history, pagination, protocol negotiation, configurable message limits, durable subscriptions, remote-decision retry orchestration, server retry hints, and standard `google.rpc.Status` details are future work. Remote preparation currently requires a normal executable handler plan with emissions; model-only plans remain separate future work and are not implemented by these RPCs.
