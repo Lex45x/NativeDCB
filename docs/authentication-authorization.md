@@ -1,6 +1,6 @@
 # NativeDCB Authentication And Authorization
 
-Status: implemented reference for [issue #2](https://github.com/Lex45x/NativeDCB/issues/2)  
+Status: implemented reference for [issue #2](https://github.com/Lex45x/NativeDCB/issues/2)
 Last verified: 2026-08-22
 
 ## Overview
