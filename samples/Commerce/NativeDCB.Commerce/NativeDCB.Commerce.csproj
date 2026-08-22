@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\NativeDCB.Sdk\NativeDCB.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\src\NativeDCB.Sdk.Analyzers\NativeDCB.Sdk.Analyzers.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\..\src\NativeDCB.Sdk.Generators\NativeDCB.Sdk.Generators.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="NativeCommerce.ndl"
+                      LogicalName="NativeDCB.Commerce.NativeCommerce.ndl" />
+  </ItemGroup>
+</Project>

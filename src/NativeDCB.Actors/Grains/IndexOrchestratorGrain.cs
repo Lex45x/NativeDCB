@@ -125,7 +125,8 @@ public sealed class IndexOrchestratorGrain(ActorStoragePath storage, IGrainFacto
         }
 
         long prefixHead = snapshots.Values.Min(snapshot => Math.Min(Math.Max(0, snapshot.Head), through));
-        IEnumerable<SequencedEventMessage> prefix = Combine(database, query, snapshots, prefixHead).Values;
+        IEnumerable<SequencedEventMessage> prefix =
+            IndexQueryCombinationKernel.Combine(database, query, snapshots, prefixHead).Values;
         IEnumerable<SequencedEventMessage> tail = [];
         if (prefixHead < through)
         {
@@ -168,7 +169,7 @@ public sealed class IndexOrchestratorGrain(ActorStoragePath storage, IGrainFacto
                 long through = Math.Min(throughEventIdInclusive ?? indexHead, indexHead);
                 return Result(
                     indexHead,
-                    Combine(database, query, snapshots, through).Values
+                    IndexQueryCombinationKernel.Combine(database, query, snapshots, through).Values
                         .Where(value => value.EventId > afterEventIdExclusive)
                         .OrderBy(value => value.EventId)
                         .Take(maxCount));
@@ -202,47 +203,6 @@ public sealed class IndexOrchestratorGrain(ActorStoragePath storage, IGrainFacto
             .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         return identities.Zip(snapshots).ToDictionary(pair => pair.First, pair => pair.Second,
             StringComparer.Ordinal);
-    }
-
-    private static Dictionary<long, SequencedEventMessage> Combine(
-        string database,
-        EventQueryMessage query,
-        IReadOnlyDictionary<string, IndexSnapshotMessage> snapshots,
-        long throughEventIdInclusive)
-    {
-        Dictionary<long, SequencedEventMessage> results = new();
-        foreach (QueryItemMessage item in query.Items)
-        {
-            foreach (string eventType in item.EventTypes)
-            {
-                Dictionary<long, SequencedEventMessage>? intersection = null;
-                foreach (EventKeyMessage key in item.Keys)
-                {
-                    IndexSnapshotMessage snapshot = snapshots[IndexIdentity.Encode(database, eventType, key)];
-                    long through = Math.Min(throughEventIdInclusive, snapshot.Head);
-                    Dictionary<long, SequencedEventMessage> current = snapshot.Events
-                        .Where(value => value.EventId <= through)
-                        .ToDictionary(value => value.EventId);
-                    if (intersection is null)
-                    {
-                        intersection = current;
-                        continue;
-                    }
-
-                    foreach (long eventId in intersection.Keys.Except(current.Keys).ToArray())
-                    {
-                        intersection.Remove(eventId);
-                    }
-                }
-
-                foreach ((long eventId, SequencedEventMessage value) in intersection ?? [])
-                {
-                    results[eventId] = value;
-                }
-            }
-        }
-
-        return results;
     }
 
     private static bool IsIndexSupported(EventQueryMessage query)

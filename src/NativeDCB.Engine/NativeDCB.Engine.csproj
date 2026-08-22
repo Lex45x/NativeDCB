@@ -7,6 +7,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="NativeDCB.Actors" />
     <InternalsVisibleTo Include="NativeDCB.Engine.Tests" />
+    <InternalsVisibleTo Include="NativeDCB.MicroBenchmarks" />
   </ItemGroup>
 
   <PropertyGroup>

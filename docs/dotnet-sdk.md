@@ -1,7 +1,7 @@
 # NativeDCB .NET SDK
 
 Status: current runtime, fluent API, analyzer, and generator reference  
-Last verified: 2026-08-18
+Last verified: 2026-08-21
 
 ## Packages And Projects
 
@@ -13,13 +13,13 @@ The repository has three SDK-related projects:
 
 The `NativeDCB.Sdk` project has private build references to the analyzer and generator and configures its NuGet package to embed both DLLs under `analyzers/dotnet/cs`. The standalone `NativeDCB.Sdk.Analyzers` and `NativeDCB.Sdk.Generators` package projects are also packable and place their DLLs in the standard `analyzers/dotnet/cs` asset path.
 
-For source-project development in this repository, `samples/CourseSubscriptions` references both Roslyn projects explicitly as analyzers:
+For source-project development in this repository, `samples/Commerce/NativeDCB.Commerce` references both Roslyn projects explicitly as analyzers:
 
 ```xml
-<ProjectReference Include="..\..\src\NativeDCB.Sdk.Analyzers\NativeDCB.Sdk.Analyzers.csproj"
-                  OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-<ProjectReference Include="..\..\src\NativeDCB.Sdk.Generators\NativeDCB.Sdk.Generators.csproj"
-                  OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+<ProjectReference Include="..\..\..\src\NativeDCB.Sdk.Analyzers\NativeDCB.Sdk.Analyzers.csproj"
+                   OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+<ProjectReference Include="..\..\..\src\NativeDCB.Sdk.Generators\NativeDCB.Sdk.Generators.csproj"
+                   OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 ```
 
 Running `dotnet pack` can therefore produce the SDK package with both build tools included, or either standalone build-tool package. The repository does not currently contain package publishing, signing, or release automation.
@@ -264,6 +264,6 @@ It returns ordered `SchemaDescriptor.ForEvent<T>()` / `ForCommand<T>()` calls. I
 
 ## Sample And Tests
 
-`samples/CourseSubscriptions` is analyzer-wired through direct project analyzer references and invokes `NativeDCB.Generated.NativeDcbGeneratedSchemas.Create()`. Its idempotent `seed` mode creates the database and registers all event/command schemas plus both NDL handlers and the fluent SDK handler without emitting events. Its `run` mode invokes the same seeder before defining a course and executing subscriptions through both authoring paths.
+`samples/Commerce/NativeDCB.Commerce` is analyzer-wired through direct project analyzer references and invokes `NativeDCB.Generated.NativeDcbGeneratedSchemas.Create()`. `CommerceSeeder` idempotently creates the database and registers 26 event schemas, 21 command schemas, the 21 handlers in `NativeCommerce.ndl`, and three fluent SDK handlers without emitting events. The `NativeDCB.Commerce.Sample` executable invokes that seeder before every mode; `run` executes the complete local commerce lifecycle, while `remote-payment` demonstrates typed remote payment preparation and completion.
 
-SDK tests cover descriptors/tags, fluent type-state/order, query translation, plan shape, remote prepare/complete mapping and typed hydration, analyzer diagnostics, and generator output. Server integration includes a full SDK flow across Database, Catalog, Statement, Command, Event, and Administration services plus remote completion, derived keys, replay, signature tampering, and matching-query staleness. The end-to-end project retains an in-process authoring-equivalence test and also launches a real server process with isolated ports and temporary storage to run the exact sample NDL alongside an SDK-authored plan, execute commands, subscribe, and verify streamed and persisted events.
+SDK tests cover descriptors/tags, fluent type-state/order, query translation, plan shape, remote prepare/complete mapping and typed hydration, analyzer diagnostics, and generator output. Server integration includes a full SDK flow across Database, Catalog, Statement, Command, Event, and Administration services plus remote completion, derived keys, replay, signature tampering, and matching-query staleness. The end-to-end project retains an in-process authoring-equivalence test and also launches a real server process with isolated ports and temporary storage, runs the Commerce sample seeder twice, verifies the generated schema and NDL/SDK handler catalog, executes `PublishProduct` through NDL, local SDK, and remote SDK paths, and verifies streamed and persisted events.

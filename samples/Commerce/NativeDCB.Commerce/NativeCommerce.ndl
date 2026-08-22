@@ -1,0 +1,874 @@
+decision PublishProduct
+from PublishProduct command
+| include ProductPublished event
+    where event.Sku == command.Sku
+    apply { ProductExists = true }
+| evaluate {
+    require command.Sku != "" else "SKU is required";
+    require command.Name != "" else "Product name is required";
+    require command.UnitPriceMinor >= 0 else "Unit price cannot be negative";
+    require command.Currency != "" else "Currency is required";
+    require not (model.ProductExists ?? false) else "Product already exists";
+}
+| decide {
+    emit ProductPublished {
+        Sku = command.Sku,
+        Name = command.Name,
+        UnitPriceMinor = command.UnitPriceMinor,
+        Currency = command.Currency
+    };
+};
+
+decision ChangeProductPrice
+from ChangeProductPrice command
+| include ProductPublished event
+    where event.Sku == command.Sku
+    apply {
+        ProductExists = true,
+        ProductActive = true,
+        ProductCurrency = event.Currency
+    }
+| include ProductPriceChanged event
+    where event.Sku == command.Sku
+    apply { ProductCurrency = event.Currency }
+| include ProductDiscontinued event
+    where event.Sku == command.Sku
+    apply { ProductActive = false }
+| evaluate {
+    require command.Sku != "" else "SKU is required";
+    require command.UnitPriceMinor >= 0 else "Unit price cannot be negative";
+    require command.Currency != "" else "Currency is required";
+    require (model.ProductExists ?? false) else "Product does not exist";
+    require (model.ProductActive ?? false) else "Product is discontinued";
+    require model.ProductCurrency == command.Currency else "Product currency cannot be changed";
+}
+| decide {
+    emit ProductPriceChanged {
+        Sku = command.Sku,
+        UnitPriceMinor = command.UnitPriceMinor,
+        Currency = command.Currency
+    };
+};
+
+decision DiscontinueProduct
+from DiscontinueProduct command
+| include ProductPublished event
+    where event.Sku == command.Sku
+    apply {
+        ProductExists = true,
+        ProductActive = true
+    }
+| include ProductDiscontinued event
+    where event.Sku == command.Sku
+    apply { ProductActive = false }
+| evaluate {
+    require command.Sku != "" else "SKU is required";
+    require command.Reason != "" else "Reason is required";
+    require (model.ProductExists ?? false) else "Product does not exist";
+    require (model.ProductActive ?? false) else "Product is already discontinued";
+}
+| decide {
+    emit ProductDiscontinued {
+        Sku = command.Sku,
+        Reason = command.Reason
+    };
+};
+
+decision ReceiveInventory
+from ReceiveInventory command
+| include ProductPublished event
+    where event.Sku == command.Sku
+    apply {
+        ProductExists = true,
+        ProductActive = true
+    }
+| include ProductDiscontinued event
+    where event.Sku == command.Sku
+    apply { ProductActive = false }
+| include InventoryReceived event
+    where event.ReceiptId == command.ReceiptId
+    apply { ReceiptExists = true }
+| evaluate {
+    require command.ReceiptId != "" else "Receipt ID is required";
+    require command.Sku != "" else "SKU is required";
+    require command.WarehouseId != "" else "Warehouse ID is required";
+    require command.Quantity > 0 else "Quantity must be positive";
+    require (model.ProductExists ?? false) else "Product does not exist";
+    require (model.ProductActive ?? false) else "Product is discontinued";
+    require not (model.ReceiptExists ?? false) else "Receipt already exists";
+}
+| decide {
+    emit InventoryReceived {
+        ReceiptId = command.ReceiptId,
+        Sku = command.Sku,
+        WarehouseId = command.WarehouseId,
+        Quantity = command.Quantity
+    };
+};
+
+decision AdjustInventory
+from AdjustInventory command
+| include ProductPublished event
+    where event.Sku == command.Sku
+    apply {
+        ProductExists = true,
+        ProductActive = true
+    }
+| include ProductDiscontinued event
+    where event.Sku == command.Sku
+    apply { ProductActive = false }
+| include InventoryReceived event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) + event.Quantity }
+| include InventoryAdjusted event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) + event.QuantityDelta }
+| include InventoryReserved event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) - event.Quantity }
+| include InventoryReleased event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) + event.Quantity }
+| include ReturnedInventoryRestocked event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) + event.Quantity }
+| include InventoryAdjusted event
+    where event.AdjustmentId == command.AdjustmentId
+    apply { AdjustmentExists = true }
+| evaluate {
+    require command.AdjustmentId != "" else "Adjustment ID is required";
+    require command.Sku != "" else "SKU is required";
+    require command.WarehouseId != "" else "Warehouse ID is required";
+    require command.QuantityDelta != 0 else "Adjustment quantity cannot be zero";
+    require command.Reason != "" else "Reason is required";
+    require (model.ProductExists ?? false) else "Product does not exist";
+    require (model.ProductActive ?? false) else "Product is discontinued";
+    require not (model.AdjustmentExists ?? false) else "Adjustment already exists";
+    require (model.AvailableQuantity ?? 0) + command.QuantityDelta >= 0 else "Adjustment would make inventory negative";
+}
+| decide {
+    emit InventoryAdjusted {
+        AdjustmentId = command.AdjustmentId,
+        Sku = command.Sku,
+        WarehouseId = command.WarehouseId,
+        QuantityDelta = command.QuantityDelta,
+        Reason = command.Reason
+    };
+};
+
+decision RegisterCustomer
+from RegisterCustomer command
+| include CustomerRegistered event
+    where event.CustomerId == command.CustomerId
+    apply { CustomerExists = true }
+| evaluate {
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.DisplayName != "" else "Display name is required";
+    require not (model.CustomerExists ?? false) else "Customer already exists";
+}
+| decide {
+    emit CustomerRegistered {
+        CustomerId = command.CustomerId,
+        DisplayName = command.DisplayName
+    };
+};
+
+decision OpenCart
+from OpenCart command
+| include CustomerRegistered event
+    where event.CustomerId == command.CustomerId
+    apply { CustomerExists = true }
+| include CartOpened event
+    where event.CartId == command.CartId
+    apply { CartExists = true }
+| evaluate {
+    require command.CartId != "" else "Cart ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.Currency != "" else "Currency is required";
+    require (model.CustomerExists ?? false) else "Customer does not exist";
+    require not (model.CartExists ?? false) else "Cart already exists";
+}
+| decide {
+    emit CartOpened {
+        CartId = command.CartId,
+        CustomerId = command.CustomerId,
+        Currency = command.Currency
+    };
+};
+
+decision ReserveCartLine
+from ReserveCartLine command
+| include CartOpened event
+    where event.CartId == command.CartId
+    apply {
+        CartExists = true,
+        CartCustomerId = event.CustomerId,
+        CartCurrency = event.Currency
+    }
+| include CartCheckedOut event
+    where event.CartId == command.CartId
+    apply { CartCheckedOut = true }
+| include ProductPublished event
+    where event.Sku == command.Sku
+    apply {
+        ProductExists = true,
+        ProductActive = true,
+        UnitPriceMinor = event.UnitPriceMinor,
+        ProductCurrency = event.Currency
+    }
+| include ProductPriceChanged event
+    where event.Sku == command.Sku
+    apply {
+        UnitPriceMinor = event.UnitPriceMinor,
+        ProductCurrency = event.Currency
+    }
+| include ProductDiscontinued event
+    where event.Sku == command.Sku
+    apply { ProductActive = false }
+| include InventoryReceived event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) + event.Quantity }
+| include InventoryAdjusted event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) + event.QuantityDelta }
+| include InventoryReserved event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) - event.Quantity }
+| include InventoryReleased event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) + event.Quantity }
+| include ReturnedInventoryRestocked event
+    where event.Sku == command.Sku and event.WarehouseId == command.WarehouseId
+    apply { AvailableQuantity = (previous.AvailableQuantity ?? 0) + event.Quantity }
+| include CartLineReserved event
+    where event.CartId == command.CartId and event.LineId == command.LineId
+    apply { LineUsed = true }
+| include CartLineRemoved event
+    where event.CartId == command.CartId and event.LineId == command.LineId
+    apply { LineUsed = true }
+| evaluate {
+    require command.CartId != "" else "Cart ID is required";
+    require command.LineId != "" else "Line ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.Sku != "" else "SKU is required";
+    require command.WarehouseId != "" else "Warehouse ID is required";
+    require command.Quantity > 0 else "Quantity must be positive";
+    require (model.CartExists ?? false) else "Cart does not exist";
+    require model.CartCustomerId == command.CustomerId else "Cart belongs to another customer";
+    require not (model.CartCheckedOut ?? false) else "Cart is checked out";
+    require (model.ProductExists ?? false) else "Product does not exist";
+    require (model.ProductActive ?? false) else "Product is discontinued";
+    require model.ProductCurrency == model.CartCurrency else "Product and cart currencies differ";
+    require not (model.LineUsed ?? false) else "Line ID has already been used";
+    require (model.AvailableQuantity ?? 0) >= command.Quantity else "Insufficient inventory";
+    let lineTotalMinor = model.UnitPriceMinor * command.Quantity;
+}
+| decide {
+    emit CartLineReserved {
+        CartId = command.CartId,
+        LineId = command.LineId,
+        CustomerId = command.CustomerId,
+        Sku = command.Sku,
+        WarehouseId = command.WarehouseId,
+        Quantity = command.Quantity,
+        UnitPriceMinor = model.UnitPriceMinor,
+        LineTotalMinor = lineTotalMinor,
+        Currency = model.CartCurrency
+    };
+    emit InventoryReserved {
+        Sku = command.Sku,
+        WarehouseId = command.WarehouseId,
+        CartId = command.CartId,
+        LineId = command.LineId,
+        Quantity = command.Quantity
+    };
+};
+
+decision RemoveCartLine
+from RemoveCartLine command
+| include CartOpened event
+    where event.CartId == command.CartId
+    apply {
+        CartExists = true,
+        CartCustomerId = event.CustomerId
+    }
+| include CartCheckedOut event
+    where event.CartId == command.CartId
+    apply { CartCheckedOut = true }
+| include CartLineReserved event
+    where event.CartId == command.CartId and event.LineId == command.LineId
+    apply {
+        LineExists = true,
+        LineActive = true,
+        LineCustomerId = event.CustomerId,
+        LineSku = event.Sku,
+        LineWarehouseId = event.WarehouseId,
+        LineQuantity = event.Quantity,
+        LineTotalMinor = event.LineTotalMinor,
+        LineCurrency = event.Currency
+    }
+| include CartLineRemoved event
+    where event.CartId == command.CartId and event.LineId == command.LineId
+    apply { LineActive = false }
+| evaluate {
+    require command.CartId != "" else "Cart ID is required";
+    require command.LineId != "" else "Line ID is required";
+    require (model.CartExists ?? false) else "Cart does not exist";
+    require not (model.CartCheckedOut ?? false) else "Cart is checked out";
+    require (model.LineExists ?? false) else "Cart line does not exist";
+    require (model.LineActive ?? false) else "Cart line is already removed";
+    require model.LineCustomerId == model.CartCustomerId else "Cart line belongs to another customer";
+}
+| decide {
+    emit CartLineRemoved {
+        CartId = command.CartId,
+        LineId = command.LineId,
+        CustomerId = model.LineCustomerId,
+        Sku = model.LineSku,
+        WarehouseId = model.LineWarehouseId,
+        Quantity = model.LineQuantity,
+        LineTotalMinor = model.LineTotalMinor,
+        Currency = model.LineCurrency
+    };
+    emit InventoryReleased {
+        Sku = model.LineSku,
+        WarehouseId = model.LineWarehouseId,
+        CartId = command.CartId,
+        LineId = command.LineId,
+        Quantity = model.LineQuantity,
+        Reason = "Cart line removed"
+    };
+};
+
+decision CheckoutCart
+from CheckoutCart command
+| include CartOpened event
+    where event.CartId == command.CartId
+    apply {
+        CartExists = true,
+        CartCustomerId = event.CustomerId,
+        CartCurrency = event.Currency
+    }
+| include CartLineReserved event
+    where event.CartId == command.CartId
+    apply {
+        ActiveLineCount = (previous.ActiveLineCount ?? 0) + 1,
+        GrossTotalMinor = (previous.GrossTotalMinor ?? 0) + event.LineTotalMinor
+    }
+| include CartLineRemoved event
+    where event.CartId == command.CartId
+    apply {
+        ActiveLineCount = (previous.ActiveLineCount ?? 0) - 1,
+        GrossTotalMinor = (previous.GrossTotalMinor ?? 0) - event.LineTotalMinor
+    }
+| include CartCheckedOut event
+    where event.CartId == command.CartId
+    apply { CartCheckedOut = true }
+| include OrderPlaced event
+    where event.OrderId == command.OrderId
+    apply { OrderExists = true }
+| evaluate {
+    require command.CartId != "" else "Cart ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require (model.CartExists ?? false) else "Cart does not exist";
+    require model.CartCustomerId == command.CustomerId else "Cart belongs to another customer";
+    require not (model.CartCheckedOut ?? false) else "Cart is already checked out";
+    require (model.ActiveLineCount ?? 0) > 0 else "Cart has no active lines";
+    require not (model.OrderExists ?? false) else "Order already exists";
+}
+| decide {
+    emit CartCheckedOut {
+        CartId = command.CartId,
+        OrderId = command.OrderId,
+        CustomerId = command.CustomerId,
+        LineCount = model.ActiveLineCount,
+        GrossTotalMinor = model.GrossTotalMinor,
+        Currency = model.CartCurrency
+    };
+    emit OrderPlaced {
+        OrderId = command.OrderId,
+        CartId = command.CartId,
+        CustomerId = command.CustomerId,
+        LineCount = model.ActiveLineCount,
+        GrossTotalMinor = model.GrossTotalMinor,
+        Currency = model.CartCurrency
+    };
+};
+
+decision DefineCoupon
+from DefineCoupon command
+| include CouponDefined event
+    where event.CouponCode == command.CouponCode
+    apply { CouponExists = true }
+| evaluate {
+    require command.CouponCode != "" else "Coupon code is required";
+    require command.DiscountMinor > 0 else "Discount must be positive";
+    require command.Currency != "" else "Currency is required";
+    require command.MaximumGlobalUses > 0 else "Maximum global uses must be positive";
+    require command.MaximumUsesPerCustomer > 0 else "Maximum customer uses must be positive";
+    require not (model.CouponExists ?? false) else "Coupon already exists";
+}
+| decide {
+    emit CouponDefined {
+        CouponCode = command.CouponCode,
+        DiscountMinor = command.DiscountMinor,
+        Currency = command.Currency,
+        MaximumGlobalUses = command.MaximumGlobalUses,
+        MaximumUsesPerCustomer = command.MaximumUsesPerCustomer
+    };
+};
+
+decision RedeemCoupon
+from RedeemCoupon command
+| include CouponDefined event
+    where event.CouponCode == command.CouponCode
+    apply {
+        CouponExists = true,
+        CouponDiscountMinor = event.DiscountMinor,
+        CouponCurrency = event.Currency,
+        MaximumGlobalUses = event.MaximumGlobalUses,
+        MaximumUsesPerCustomer = event.MaximumUsesPerCustomer
+    }
+| include CouponRedeemed event
+    where event.CouponCode == command.CouponCode
+    apply { GlobalUseCount = (previous.GlobalUseCount ?? 0) + 1 }
+| include CouponRedeemed event
+    where event.CouponCode == command.CouponCode and event.CustomerId == command.CustomerId
+    apply { CustomerUseCount = (previous.CustomerUseCount ?? 0) + 1 }
+| include CouponRedeemed event
+    where event.CouponCode == command.CouponCode and event.OrderId == command.OrderId
+    apply { CouponAlreadyUsedOnOrder = true }
+| include OrderPlaced event
+    where event.OrderId == command.OrderId
+    apply {
+        OrderExists = true,
+        OrderCustomerId = event.CustomerId,
+        OrderGrossTotalMinor = event.GrossTotalMinor,
+        OrderCurrency = event.Currency
+    }
+| include OrderDiscountApplied event
+    where event.OrderId == command.OrderId
+    apply { OrderDiscountTotalMinor = (previous.OrderDiscountTotalMinor ?? 0) + event.DiscountMinor }
+| include OrderCancelled event
+    where event.OrderId == command.OrderId
+    apply { OrderCancelled = true }
+| include PaymentAuthorized event
+    where event.OrderId == command.OrderId
+    apply { PaymentAuthorized = true }
+| include PaymentDeclined event
+    where event.OrderId == command.OrderId
+    apply { PaymentPreviouslyDeclined = true }
+| evaluate {
+    require command.CouponCode != "" else "Coupon code is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require (model.CouponExists ?? false) else "Coupon does not exist";
+    require (model.GlobalUseCount ?? 0) < model.MaximumGlobalUses else "Coupon global use limit reached";
+    require (model.CustomerUseCount ?? 0) < model.MaximumUsesPerCustomer else "Coupon customer use limit reached";
+    require not (model.CouponAlreadyUsedOnOrder ?? false) else "Coupon already redeemed for order";
+    require (model.OrderExists ?? false) else "Order does not exist";
+    require model.OrderCustomerId == command.CustomerId else "Order belongs to another customer";
+    require not (model.OrderCancelled ?? false) else "Order is cancelled";
+    require not (model.PaymentAuthorized ?? false) else "Order is already paid";
+    require model.CouponCurrency == model.OrderCurrency else "Coupon and order currencies differ";
+    require model.CouponDiscountMinor <= model.OrderGrossTotalMinor - (model.OrderDiscountTotalMinor ?? 0)
+        else "Coupon would make the payable amount negative";
+}
+| decide {
+    emit CouponRedeemed {
+        CouponCode = command.CouponCode,
+        CustomerId = command.CustomerId,
+        OrderId = command.OrderId
+    };
+    emit OrderDiscountApplied {
+        OrderId = command.OrderId,
+        CouponCode = command.CouponCode,
+        CustomerId = command.CustomerId,
+        DiscountMinor = model.CouponDiscountMinor,
+        Currency = model.CouponCurrency
+    };
+};
+
+decision AuthorizePayment
+from AuthorizePayment command
+| include OrderPlaced event
+    where event.OrderId == command.OrderId
+    apply {
+        OrderExists = true,
+        GrossTotalMinor = event.GrossTotalMinor,
+        Currency = event.Currency
+    }
+| include OrderDiscountApplied event
+    where event.OrderId == command.OrderId
+    apply { DiscountTotalMinor = (previous.DiscountTotalMinor ?? 0) + event.DiscountMinor }
+| include OrderCancelled event
+    where event.OrderId == command.OrderId
+    apply { IsCancelled = true }
+| include PaymentAuthorized event
+    where event.OrderId == command.OrderId
+    apply { IsAuthorized = true }
+| include PaymentDeclined event
+    where event.OrderId == command.OrderId
+    apply { IsDeclined = true }
+| include PaymentAuthorized event
+    where event.PaymentId == command.PaymentId
+    apply { PaymentAttemptExists = true }
+| include PaymentDeclined event
+    where event.PaymentId == command.PaymentId
+    apply { PaymentAttemptExists = true }
+| evaluate {
+    require command.PaymentId != "" else "Payment ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require (model.OrderExists ?? false) else "Order does not exist";
+    require not (model.IsCancelled ?? false) else "Order is cancelled";
+    require not (model.IsAuthorized ?? false) else "Order is already paid";
+    require not (model.PaymentAttemptExists ?? false) else "Payment attempt already exists";
+    let payableAmountMinor = model.GrossTotalMinor - (model.DiscountTotalMinor ?? 0);
+    require payableAmountMinor > 0 else "Order has no payable amount";
+}
+| decide {
+    emit PaymentAuthorized {
+        PaymentId = command.PaymentId,
+        OrderId = command.OrderId,
+        AmountMinor = payableAmountMinor,
+        Currency = model.Currency,
+        GatewayReference = "authorization-" + command.PaymentId
+    };
+};
+
+decision RecordPaymentDeclined
+from RecordPaymentDeclined command
+| include OrderPlaced event
+    where event.OrderId == command.OrderId
+    apply { OrderExists = true }
+| include OrderCancelled event
+    where event.OrderId == command.OrderId
+    apply { OrderCancelled = true }
+| include PaymentAuthorized event
+    where event.OrderId == command.OrderId
+    apply { OrderAlreadyAuthorized = true }
+| include PaymentAuthorized event
+    where event.PaymentId == command.PaymentId
+    apply { PaymentAttemptExists = true }
+| include PaymentDeclined event
+    where event.PaymentId == command.PaymentId
+    apply { PaymentAttemptExists = true }
+| evaluate {
+    require command.PaymentId != "" else "Payment ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require command.Reason != "" else "Reason is required";
+    require (model.OrderExists ?? false) else "Order does not exist";
+    require not (model.OrderCancelled ?? false) else "Order is cancelled";
+    require not (model.OrderAlreadyAuthorized ?? false) else "Order is already paid";
+    require not (model.PaymentAttemptExists ?? false) else "Payment attempt already exists";
+}
+| decide {
+    emit PaymentDeclined {
+        PaymentId = command.PaymentId,
+        OrderId = command.OrderId,
+        Reason = command.Reason
+    };
+};
+
+decision CancelOrder
+from CancelOrder command
+| include OrderPlaced event
+    where event.OrderId == command.OrderId
+    apply {
+        OrderExists = true,
+        OrderCustomerId = event.CustomerId
+    }
+| include OrderCancelled event
+    where event.OrderId == command.OrderId
+    apply { OrderCancelled = true }
+| include PaymentAuthorized event
+    where event.OrderId == command.OrderId
+    apply { PaymentAuthorized = true }
+| include ShipmentCreated event
+    where event.OrderId == command.OrderId
+    apply { ShipmentExists = true }
+| include OrderShipped event
+    where event.OrderId == command.OrderId
+    apply { OrderShipped = true }
+| evaluate {
+    require command.OrderId != "" else "Order ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.Reason != "" else "Reason is required";
+    require (model.OrderExists ?? false) else "Order does not exist";
+    require model.OrderCustomerId == command.CustomerId else "Order belongs to another customer";
+    require not (model.OrderCancelled ?? false) else "Order is already cancelled";
+    require not (model.PaymentAuthorized ?? false) else "Paid order cannot be cancelled";
+    require not (model.ShipmentExists ?? false) else "Order already has a shipment";
+    require not (model.OrderShipped ?? false) else "Order is already shipped";
+}
+| decide {
+    emit OrderCancelled {
+        OrderId = command.OrderId,
+        CustomerId = model.OrderCustomerId,
+        Reason = command.Reason
+    };
+};
+
+decision CreateShipment
+from CreateShipment command
+| include OrderPlaced event
+    where event.OrderId == command.OrderId
+    apply {
+        OrderExists = true,
+        OrderCustomerId = event.CustomerId
+    }
+| include PaymentAuthorized event
+    where event.OrderId == command.OrderId
+    apply { PaymentAuthorized = true }
+| include OrderCancelled event
+    where event.OrderId == command.OrderId
+    apply { OrderCancelled = true }
+| include ShipmentCreated event
+    where event.OrderId == command.OrderId
+    apply { OrderShipmentExists = true }
+| include ShipmentCreated event
+    where event.ShipmentId == command.ShipmentId
+    apply { ShipmentIdExists = true }
+| evaluate {
+    require command.ShipmentId != "" else "Shipment ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.Carrier != "" else "Carrier is required";
+    require (model.OrderExists ?? false) else "Order does not exist";
+    require model.OrderCustomerId == command.CustomerId else "Order belongs to another customer";
+    require (model.PaymentAuthorized ?? false) else "Order is not paid";
+    require not (model.OrderCancelled ?? false) else "Order is cancelled";
+    require not (model.OrderShipmentExists ?? false) else "Order already has a shipment";
+    require not (model.ShipmentIdExists ?? false) else "Shipment already exists";
+}
+| decide {
+    emit ShipmentCreated {
+        ShipmentId = command.ShipmentId,
+        OrderId = command.OrderId,
+        CustomerId = model.OrderCustomerId,
+        Carrier = command.Carrier
+    };
+};
+
+decision ShipOrder
+from ShipOrder command
+| include ShipmentCreated event
+    where event.ShipmentId == command.ShipmentId
+    apply {
+        ShipmentExists = true,
+        ShipmentOrderId = event.OrderId,
+        ShipmentCustomerId = event.CustomerId
+    }
+| include OrderCancelled event
+    where event.OrderId == command.OrderId
+    apply { OrderCancelled = true }
+| include OrderShipped event
+    where event.ShipmentId == command.ShipmentId
+    apply { ShipmentShipped = true }
+| include OrderDelivered event
+    where event.ShipmentId == command.ShipmentId
+    apply { ShipmentDelivered = true }
+| evaluate {
+    require command.ShipmentId != "" else "Shipment ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.TrackingCode != "" else "Tracking code is required";
+    require (model.ShipmentExists ?? false) else "Shipment does not exist";
+    require model.ShipmentOrderId == command.OrderId else "Shipment belongs to another order";
+    require model.ShipmentCustomerId == command.CustomerId else "Shipment belongs to another customer";
+    require not (model.OrderCancelled ?? false) else "Order is cancelled";
+    require not (model.ShipmentShipped ?? false) else "Shipment is already shipped";
+    require not (model.ShipmentDelivered ?? false) else "Shipment is already delivered";
+}
+| decide {
+    emit OrderShipped {
+        ShipmentId = command.ShipmentId,
+        OrderId = command.OrderId,
+        CustomerId = model.ShipmentCustomerId,
+        TrackingCode = command.TrackingCode
+    };
+};
+
+decision DeliverOrder
+from DeliverOrder command
+| include ShipmentCreated event
+    where event.ShipmentId == command.ShipmentId
+    apply {
+        ShipmentExists = true,
+        ShipmentOrderId = event.OrderId,
+        ShipmentCustomerId = event.CustomerId
+    }
+| include OrderShipped event
+    where event.ShipmentId == command.ShipmentId
+    apply { ShipmentShipped = true }
+| include OrderDelivered event
+    where event.ShipmentId == command.ShipmentId
+    apply { ShipmentDelivered = true }
+| evaluate {
+    require command.ShipmentId != "" else "Shipment ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require (model.ShipmentExists ?? false) else "Shipment does not exist";
+    require model.ShipmentOrderId == command.OrderId else "Shipment belongs to another order";
+    require model.ShipmentCustomerId == command.CustomerId else "Shipment belongs to another customer";
+    require (model.ShipmentShipped ?? false) else "Shipment has not shipped";
+    require not (model.ShipmentDelivered ?? false) else "Shipment is already delivered";
+}
+| decide {
+    emit OrderDelivered {
+        ShipmentId = command.ShipmentId,
+        OrderId = model.ShipmentOrderId,
+        CustomerId = model.ShipmentCustomerId
+    };
+};
+
+decision RequestReturn
+from RequestReturn command
+| include OrderDelivered event
+    where event.OrderId == command.OrderId
+    apply {
+        OrderDelivered = true,
+        OrderCustomerId = event.CustomerId
+    }
+| include ReturnRequested event
+    where event.ReturnId == command.ReturnId
+    apply { ReturnIdExists = true }
+| include ReturnReceived event
+    where event.ReturnId == command.ReturnId
+    apply { ReturnIdExists = true }
+| include ReturnRequested event
+    where event.OrderId == command.OrderId and event.LineId == command.LineId
+    apply { LineReturnExists = true }
+| include ReturnReceived event
+    where event.OrderId == command.OrderId and event.LineId == command.LineId
+    apply { LineReturnExists = true }
+| evaluate {
+    require command.ReturnId != "" else "Return ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require command.LineId != "" else "Line ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.Sku != "" else "SKU is required";
+    require command.Quantity > 0 else "Quantity must be positive";
+    require command.Reason != "" else "Reason is required";
+    require (model.OrderDelivered ?? false) else "Order has not been delivered";
+    require model.OrderCustomerId == command.CustomerId else "Order belongs to another customer";
+    require not (model.ReturnIdExists ?? false) else "Return already exists";
+    require not (model.LineReturnExists ?? false) else "Order line already has a return";
+}
+| decide {
+    emit ReturnRequested {
+        ReturnId = command.ReturnId,
+        OrderId = command.OrderId,
+        LineId = command.LineId,
+        CustomerId = command.CustomerId,
+        Sku = command.Sku,
+        Quantity = command.Quantity,
+        Reason = command.Reason
+    };
+};
+
+decision ReceiveReturn
+from ReceiveReturn command
+| include ReturnRequested event
+    where event.ReturnId == command.ReturnId
+    apply {
+        ReturnExists = true,
+        ReturnOrderId = event.OrderId,
+        ReturnLineId = event.LineId,
+        ReturnCustomerId = event.CustomerId,
+        ReturnSku = event.Sku,
+        ReturnQuantity = event.Quantity
+    }
+| include ReturnReceived event
+    where event.ReturnId == command.ReturnId
+    apply { ReturnReceived = true }
+| include ReturnedInventoryRestocked event
+    where event.ReturnId == command.ReturnId
+    apply { ReturnRestocked = true }
+| evaluate {
+    require command.ReturnId != "" else "Return ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require command.LineId != "" else "Line ID is required";
+    require command.CustomerId != "" else "Customer ID is required";
+    require command.Sku != "" else "SKU is required";
+    require command.WarehouseId != "" else "Warehouse ID is required";
+    require command.Quantity > 0 else "Quantity must be positive";
+    require (model.ReturnExists ?? false) else "Return does not exist";
+    require model.ReturnOrderId == command.OrderId else "Return belongs to another order";
+    require model.ReturnLineId == command.LineId else "Return belongs to another line";
+    require model.ReturnCustomerId == command.CustomerId else "Return belongs to another customer";
+    require model.ReturnSku == command.Sku else "Return belongs to another SKU";
+    require model.ReturnQuantity == command.Quantity else "Return quantity does not match request";
+    require not (model.ReturnReceived ?? false) else "Return is already received";
+    require not (model.ReturnRestocked ?? false) else "Return inventory is already restocked";
+}
+| decide {
+    emit ReturnReceived {
+        ReturnId = command.ReturnId,
+        OrderId = command.OrderId,
+        LineId = command.LineId,
+        CustomerId = command.CustomerId,
+        Sku = command.Sku,
+        WarehouseId = command.WarehouseId,
+        Quantity = command.Quantity
+    };
+    emit ReturnedInventoryRestocked {
+        ReturnId = command.ReturnId,
+        Sku = command.Sku,
+        WarehouseId = command.WarehouseId,
+        Quantity = command.Quantity
+    };
+};
+
+decision RefundPayment
+from RefundPayment command
+| include ReturnReceived event
+    where event.ReturnId == command.ReturnId
+    apply {
+        ReturnExists = true,
+        ReturnReceived = true,
+        ReturnOrderId = event.OrderId
+    }
+| include PaymentAuthorized event
+    where event.PaymentId == command.PaymentId
+    apply {
+        PaymentAuthorized = true,
+        PaymentOrderId = event.OrderId,
+        AuthorizedAmountMinor = event.AmountMinor,
+        Currency = event.Currency
+    }
+| include PaymentRefunded event
+    where event.RefundId == command.RefundId
+    apply { RefundExists = true }
+| include PaymentRefunded event
+    where event.ReturnId == command.ReturnId
+    apply { ReturnAlreadyRefunded = true }
+| include PaymentRefunded event
+    where event.PaymentId == command.PaymentId
+    apply { RefundedAmountMinor = (previous.RefundedAmountMinor ?? 0) + event.AmountMinor }
+| evaluate {
+    require command.RefundId != "" else "Refund ID is required";
+    require command.PaymentId != "" else "Payment ID is required";
+    require command.OrderId != "" else "Order ID is required";
+    require command.ReturnId != "" else "Return ID is required";
+    require (model.ReturnReceived ?? false) else "Return has not been received";
+    require model.ReturnOrderId == command.OrderId else "Return belongs to another order";
+    require (model.PaymentAuthorized ?? false) else "Payment is not authorized";
+    require model.PaymentOrderId == command.OrderId else "Payment belongs to another order";
+    require not (model.RefundExists ?? false) else "Refund already exists";
+    require not (model.ReturnAlreadyRefunded ?? false) else "Return is already refunded";
+    let refundableAmountMinor = model.AuthorizedAmountMinor - (model.RefundedAmountMinor ?? 0);
+    require refundableAmountMinor > 0 else "Payment has no refundable amount";
+}
+| decide {
+    emit PaymentRefunded {
+        RefundId = command.RefundId,
+        PaymentId = command.PaymentId,
+        OrderId = command.OrderId,
+        ReturnId = command.ReturnId,
+        AmountMinor = refundableAmountMinor,
+        Currency = model.Currency,
+        GatewayReference = "refund-" + command.RefundId
+    };
+};
