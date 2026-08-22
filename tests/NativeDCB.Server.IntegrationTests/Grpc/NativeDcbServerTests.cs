@@ -26,7 +26,7 @@ using QueryItem = NativeDCB.Protocol.V1.QueryItem;
 // ReSharper disable NotAccessedPositionalProperty.Local
 namespace NativeDCB.Server.IntegrationTests.Grpc;
 
-public sealed class NativeDcbServerTests : IAsyncLifetime
+public sealed partial class NativeDcbServerTests : IAsyncLifetime
 {
     private const string CreateCourseNdl = """
                                            decision DefineCourse

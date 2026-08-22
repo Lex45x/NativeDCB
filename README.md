@@ -35,7 +35,7 @@ Remote decision preparation/completion is disabled unless the server has an HMAC
 In another shell, create the database with the repository CLI:
 
 ```powershell
-dotnet run --project src\NativeDCB.Cli -- database create --database school
+dotnet run --project src\NativeDCB.Cli -- database create --database quickstart
 ```
 
 The CLI defaults to `http://localhost:5010` and covers all 31 RPCs. See the [CLI reference](docs/cli.md) for schemas, NDL statements, commands, remote decision preparation/completion, reads, subscriptions, input conventions, and exit codes.
@@ -50,26 +50,39 @@ Open `https://localhost:7229`. The browser loads a standalone Blazor WebAssembly
 
 The browser endpoint is configured in public static content at `src/NativeDCB.Web/wwwroot/appsettings.json`; never put credentials or secrets there. Cross-origin browser calls are allowed only from origins in the server's `GrpcWeb:AllowedOrigins` configuration, which defaults to the two local Web launch origins. CORS is not authentication or authorization. NativeDCB currently provides neither, so do not expose the server or console to untrusted networks.
 
-## Course Subscriptions Sample
+## Native Commerce Sample
 
-After the server is running:
+The repository's sole [Native Commerce sample application](samples/Commerce/NativeDCB.Commerce.Sample/README.md) exercises catalog, inventory, carts, checkout, promotions, payments, fulfilment, returns, contention, command reconciliation, and remote payment completion. After the server is running, seed a catalog without publishing events:
 
 ```powershell
-dotnet run --project samples\CourseSubscriptions -- run http://localhost:5010 school
+dotnet run --project samples\Commerce\NativeDCB.Commerce.Sample -- seed http://localhost:5010 commerce-seed
 ```
 
-Use `seed` instead of `run` to idempotently create the database and register all schemas and handlers without publishing events. Run mode seeds first, then defines a course and executes one NDL and one SDK subscription. Both authoring paths converge on `DecisionPlan` and the same transaction runtime.
-
-Use `remote` to seed, define a course, hydrate the SDK handler's typed model with `PrepareDecision`, and submit the event with `CompleteDecision`. Configure `RemoteDecisions` before starting the server for this mode.
+Run the complete local commerce lifecycle in a fresh database:
 
 ```powershell
-dotnet run --project samples\CourseSubscriptions -- remote http://localhost:5010 school
+dotnet run --project samples\Commerce\NativeDCB.Commerce.Sample -- run http://localhost:5010 commerce-run
+```
+
+Configure `RemoteDecisions` before starting the server, then run the trusted remote payment completion scenario in another fresh database:
+
+```powershell
+dotnet run --project samples\Commerce\NativeDCB.Commerce.Sample -- remote-payment http://localhost:5010 commerce-remote
+```
+
+The manual benchmark suite includes 13 BenchmarkDotNet CPU/filesystem classes and 12 real-server Native Commerce scenarios. List them without running a measurement:
+
+```powershell
+dotnet run -c Release --project benchmarks\NativeDCB.MicroBenchmarks -- --list flat
+dotnet run -c Release --project benchmarks\NativeDCB.SystemBenchmarks -- --list-scenarios
 ```
 
 ## Documentation
 
 - [Requirements and implementation status](docs/requirements.md)
 - [Implemented actor architecture and persistence ownership](docs/actor-architecture.md)
+- [Implemented Native Commerce domain and workload model](docs/commerce-domain.md)
+- [Implemented benchmark suite, methodology, scenarios, metrics, and reporting](docs/benchmarking.md)
 - [Solution structure, projects, tests, and sample](docs/solution-structure.md)
 - [Internal engine, actors, NDJSON, state files, and indexes](docs/internal-engine.md)
 - [Database lifecycle and health](docs/database-lifecycle.md)

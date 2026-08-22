@@ -1,7 +1,7 @@
 # NativeDCB CLI
 
 Status: implemented 31-RPC native gRPC client reference
-Last verified: 2026-08-18
+Last verified: 2026-08-21
 
 ## Build And Run
 
@@ -129,10 +129,10 @@ PowerShell examples:
 ```powershell
 Get-Content -Raw .\command.json |
   dotnet run --project src\NativeDCB.Cli -- command execute-handler `
-    --database school --handler DefineCourse --command-stdin
+    --database commerce-cli --handler PublishProduct --command-stdin
 
 dotnet run --project src\NativeDCB.Cli -- statement explain `
-  --database school --ndl-file samples\CourseSubscriptions\CourseSubscriptions.ndl
+  --database commerce-cli --ndl-file samples\Commerce\NativeDCB.Commerce\NativeCommerce.ndl
 ```
 
 ### Keys
@@ -140,7 +140,7 @@ dotnet run --project src\NativeDCB.Cli -- statement explain `
 Repeat `--key name=value` where a command accepts keys. The first `=` separates the name from the value, so values may be empty or contain additional `=` characters. Key names must be non-empty. For example:
 
 ```powershell
---key course=native-dcb --key token=part1=part2 --key optional=
+--key sku=native-dcb-mug --key token=part1=part2 --key optional=
 ```
 
 ### Queries
@@ -157,9 +157,9 @@ These forms can be combined; each added item is ORed according to the protocol q
 
 ```powershell
 dotnet run --project src\NativeDCB.Cli -- event read-query `
-  --database school `
-  --event-type StudentSubscribedToCourse `
-  --key student=student-ndl `
+  --database commerce-cli `
+  --event-type ProductPublished `
+  --key sku=native-dcb-mug `
   --consistency committed-scan
 ```
 
@@ -188,23 +188,39 @@ For streaming commands, response lines can be emitted before a later unsuccessfu
 
 ## Remote Decision Flow
 
-Prepare a typed handler's model using the command input syntax shared with `execute-handler`:
+Seed the Commerce catalog first. Seeding creates the database and registers `PublishProductSdk` without publishing events:
+
+```powershell
+dotnet run --project samples\Commerce\NativeDCB.Commerce.Sample -- `
+  seed http://localhost:5010 commerce-cli
+```
+
+Prepare a new product publication using the command input syntax shared with `execute-handler`:
 
 ```powershell
 dotnet run --project src\NativeDCB.Cli -- command prepare-decision `
-  --database school --handler SubscribeStudent `
-  --command '{"StudentId":"student-remote","CourseId":"native-dcb"}' `
+  --database commerce-cli --handler PublishProductSdk `
+  --command '{"Sku":"remote-product","Name":"Remote Product","UnitPriceMinor":2500,"Currency":"USD"}' `
   --command-id 00000000-0000-0000-0000-000000000001 > .\prepared.json
 ```
 
-Redirect the preparation response, read its base64 `prepared.modelSignature`, and submit event payloads matching the plan's emission order and count. The server validates the current schema and derives consistency keys; event JSON does not include keys.
+Inspect the base64-encoded hydrated model before proposing an event. `ProductExists` must not be true for this publication to be valid. Then write the single event declared by the handler; the server validates its schema and derives the `sku` consistency key, so event JSON does not include keys.
 
 ```powershell
-(Get-Content -Raw .\prepared.json | ConvertFrom-Json).prepared.modelSignature |
-  Set-Content .\model-signature.txt
+$prepared = Get-Content -Raw .\prepared.json | ConvertFrom-Json
+$modelJson = [Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String($prepared.prepared.modelJson))
+$model = $modelJson | ConvertFrom-Json
+if ($model.ProductExists -eq $true) {
+  throw "Product already exists; do not propose ProductPublished."
+}
+
+$prepared.prepared.modelSignature | Set-Content .\model-signature.txt
+'[{"type":"ProductPublished","data":{"Sku":"remote-product","Name":"Remote Product","UnitPriceMinor":2500,"Currency":"USD"}}]' |
+  Set-Content .\events.json
 
 dotnet run --project src\NativeDCB.Cli -- command complete-decision `
-  --database school --signature-file .\model-signature.txt --events-file .\events.json
+  --database commerce-cli --signature-file .\model-signature.txt --events-file .\events.json
 ```
 
 Prefer `--signature-file` or `--signature-stdin` over inline `--signature` so the bearer capability does not appear in shell history, process listings, or command logs. For a pipeline, send only the extracted `prepared.modelSignature` to `--signature-stdin`; standard input cannot also supply events in the same invocation. Protect and delete redirected preparation and signature files when they are no longer needed.
@@ -213,58 +229,37 @@ Completion is a single conditional append. A `stale` response means a matching e
 
 ## Practical Flow
 
-Start the server's native HTTP/2 endpoint before this sequence. First create a database:
+Start the server's native HTTP/2 endpoint before this sequence. Seed the Native Commerce catalog; seeding creates the database when absent and idempotently registers all generated schemas, NDL handlers, and fluent SDK handlers without publishing events:
 
 ```powershell
-dotnet run --project src\NativeDCB.Cli -- database create --database school
+dotnet run --project samples\Commerce\NativeDCB.Commerce.Sample -- `
+  seed http://localhost:5010 commerce-cli
 ```
 
-Register an event schema. The consistency-key extension is required for an event schema:
+The exact sample NDL can then be explained through the CLI:
 
 ```powershell
-$courseDefinedSchema = @'
-{
-  "type": "object",
-  "properties": {
-    "CourseId": {
-      "type": "string",
-      "x-native-dcb-consistency-key": "course"
-    },
-    "Capacity": { "type": "integer" }
-  },
-  "required": ["CourseId", "Capacity"],
-  "additionalProperties": false
-}
-'@
-
-dotnet run --project src\NativeDCB.Cli -- catalog register-event-schema `
-  --database school --name CourseDefined --schema $courseDefinedSchema
+dotnet run --project src\NativeDCB.Cli -- statement explain `
+  --database commerce-cli `
+  --ndl-file samples\Commerce\NativeDCB.Commerce\NativeCommerce.ndl
 ```
 
-Register the sample's two NDL handlers through the statement stream:
+Execute `PublishProduct` with inline command JSON:
 
 ```powershell
-dotnet run --project src\NativeDCB.Cli -- statement execute `
-  --database school `
-  --ndl-file samples\CourseSubscriptions\CourseSubscriptions.ndl
-```
-
-Execute `DefineCourse` with inline command JSON:
-
-```powershell
-$command = '{"CourseId":"native-dcb","Capacity":30}'
+$command = '{"Sku":"native-dcb-mug","Name":"Native DCB Mug","UnitPriceMinor":2500,"Currency":"USD"}'
 dotnet run --project src\NativeDCB.Cli -- command execute-handler `
-  --database school --handler DefineCourse --command $command
+  --database commerce-cli --handler PublishProduct --command $command
 ```
 
 Read the committed event by range or by its consistency key:
 
 ```powershell
 dotnet run --project src\NativeDCB.Cli -- event read-range `
-  --database school --after 0 --mode snapshot
+  --database commerce-cli --after 0 --mode snapshot
 
 dotnet run --project src\NativeDCB.Cli -- event read-type-and-keys `
-  --database school --event-type CourseDefined --key course=native-dcb `
+  --database commerce-cli --event-type ProductPublished --key sku=native-dcb-mug `
   --consistency committed-scan
 ```
 

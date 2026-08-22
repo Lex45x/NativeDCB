@@ -1,7 +1,9 @@
 <Solution>
   <Folder Name="/docs/">
     <File Path="docs/actor-architecture.md" />
+    <File Path="docs/benchmarking.md" />
     <File Path="docs/cli.md" />
+    <File Path="docs/commerce-domain.md" />
     <File Path="docs/database-lifecycle.md" />
     <File Path="docs/dotnet-sdk.md" />
     <File Path="docs/dsl.md" />
@@ -9,6 +11,10 @@
     <File Path="docs/internal-engine.md" />
     <File Path="docs/requirements.md" />
     <File Path="docs/solution-structure.md" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/NativeDCB.MicroBenchmarks/NativeDCB.MicroBenchmarks.csproj" />
+    <Project Path="benchmarks/NativeDCB.SystemBenchmarks/NativeDCB.SystemBenchmarks.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/NativeDCB.Actors/NativeDCB.Actors.csproj" />
@@ -33,6 +39,7 @@
     <Project Path="tests/NativeDCB.EndToEndTests/NativeDCB.EndToEndTests.csproj" />
   </Folder>
   <Folder Name="/samples/">
-    <Project Path="samples/CourseSubscriptions/CourseSubscriptions.csproj" />
+    <Project Path="samples/Commerce/NativeDCB.Commerce.Sample/NativeDCB.Commerce.Sample.csproj" />
+    <Project Path="samples/Commerce/NativeDCB.Commerce/NativeDCB.Commerce.csproj" />
   </Folder>
 </Solution>

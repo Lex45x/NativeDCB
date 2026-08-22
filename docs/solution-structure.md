@@ -1,11 +1,11 @@
 # NativeDCB Solution Structure
 
 Status: implementation reference with future work called out explicitly  
-Last verified: 2026-08-19
+Last verified: 2026-08-21
 
 ## Repository
 
-NativeDCB is a .NET 10 solution (`NativeDCB.slnx`) containing eleven source projects, seven test projects, and one sample. Package versions are declared directly in project files; there is no `Directory.Packages.props`. Common nullable, analyzer, deterministic-build, and warnings-as-errors settings are in `Directory.Build.props`. `global.json` selects SDK `10.0.400` with latest-patch roll-forward.
+NativeDCB is a .NET 10 solution (`NativeDCB.slnx`) containing eleven source projects, seven test projects, one sample application, one reusable sample domain library, and two benchmark executables. Package versions are declared directly in project files; there is no `Directory.Packages.props`. Common nullable, analyzer, deterministic-build, and warnings-as-errors settings are in `Directory.Build.props`. `global.json` selects SDK `10.0.400` with latest-patch roll-forward.
 
 ```text
 src/
@@ -29,7 +29,12 @@ tests/
   NativeDCB.Sdk.Generators.Tests
   NativeDCB.EndToEndTests
 samples/
-  CourseSubscriptions
+  Commerce/
+    NativeDCB.Commerce
+    NativeDCB.Commerce.Sample
+benchmarks/
+  NativeDCB.MicroBenchmarks
+  NativeDCB.SystemBenchmarks
 ```
 
 There is no `NativeDCB.Web.Tests` project and no container, CI, signing, package-publishing, or release configuration in the repository. NuGet packing is configured for the SDK, analyzer, and generator projects.
@@ -90,7 +95,7 @@ CLI implementation files are grouped under `Application`, `Arguments`, `IO`, and
 
 ### `NativeDCB.Sdk.Analyzers` and `NativeDCB.Sdk.Generators`
 
-These are separate `netstandard2.0` Roslyn projects. Each packs its DLL under `analyzers/dotnet/cs`; the `NativeDCB.Sdk` package also embeds both DLLs there. `samples/CourseSubscriptions` uses direct analyzer project references for repository builds and consumes the generated schema factory.
+These are separate `netstandard2.0` Roslyn projects. Each packs its DLL under `analyzers/dotnet/cs`; the `NativeDCB.Sdk` package also embeds both DLLs there. `samples/Commerce/NativeDCB.Commerce` uses direct analyzer project references for repository builds and consumes the generated schema factory.
 
 - The analyzer reports four schema diagnostics (`NDCB001`-`NDCB004`).
 - The incremental generator emits `NativeDCB.Generated.NativeDcbGeneratedSchemas.Create()`.
@@ -105,6 +110,12 @@ The browser gRPC facade is under `Grpc`, descriptor discovery is nested under `G
 
 `wwwroot/appsettings.json` is public browser configuration and defaults `NativeDCB:ServerAddress` to `https://localhost:7154`. Browser origins must also be present in the server's `GrpcWeb:AllowedOrigins`; the defaults cover the Web project's HTTP and HTTPS launch origins. This CORS allowlist does not provide authentication. The application does not persist operator history, consume external logs, authenticate users, or access database files directly.
 
+### Benchmark Executables
+
+`NativeDCB.MicroBenchmarks` uses BenchmarkDotNet for eight deterministic CPU/allocation classes and five isolated filesystem classes covering queries, schemas, mapping, NDL/SDK compilation, pure decision/index kernels, append, recovery, partition reads, index persistence, and state generation. Filesystem runs require an explicit `NATIVEDCB_BENCHMARK_ROOT` and report the selected storage environment.
+
+`NativeDCB.SystemBenchmarks` uses NBomber plus a repository-owned coordinator. It launches a real Release server with fresh ports and storage, seeds Native Commerce, runs one of 12 independently selectable scenarios through closed-loop, planned open-loop, synchronized-burst, or correlated-workflow scheduling, verifies persisted history, samples the child process, and writes a versioned result bundle. Optional profiling attaches `dotnet-counters`, `dotnet-trace`, or `dotnet-gcdump` to the server PID.
+
 ## Dependency Direction
 
 ```text
@@ -115,8 +126,10 @@ Server -> Actors + Engine + Model + Ndl + Protocol
 Sdk -> Model + Protocol
 Cli -> Model + Protocol + Sdk
 Web -> Protocol
+MicroBenchmarks -> Actors + Engine + Model + Ndl + Sdk + Commerce
+SystemBenchmarks -> Sdk + Protocol + Commerce; launches Server as a child process
 
-Sdk.Analyzers and Sdk.Generators are Roslyn build tools referenced privately for SDK packaging and directly as analyzers by the sample.
+Sdk.Analyzers and Sdk.Generators are Roslyn build tools referenced privately for SDK packaging and directly as analyzers by NativeDCB.Commerce.
 ```
 
 The Server project still has direct project references to Engine, Model, and NDL in addition to Actors and Protocol, although `NativeDCB.Server/Grpc` uses actor contracts/messages and public model mapping rather than Engine storage, catalogs, or decision runtimes. The SDK, CLI, and Web application do not reference Orleans or Engine. Web does not reference the SDK and uses generated protocol clients directly.
@@ -128,6 +141,8 @@ The runnable boundaries are:
 - `NativeDCB.Server`: owns the local Orleans silo and gRPC/health endpoints; hosted actors own database workflows and file mutation.
 - `NativeDCB.Cli`: a short- or long-lived native HTTP/2 gRPC client process.
 - `NativeDCB.Web`: static assets served by the development host or another static host, with application code executing in the browser WebAssembly runtime and calling `NativeDCB.Server` directly over gRPC-Web.
+- `NativeDCB.MicroBenchmarks`: short-lived BenchmarkDotNet hosts for deterministic CPU and environment-sensitive filesystem measurements.
+- `NativeDCB.SystemBenchmarks`: coordinator/load-generator process that owns a fresh child server, result bundle, and correctness boundary for each independent run.
 
 `NativeDCB.Server` remains the executable host, but the actor layer owns database state and file mutation. The server transport layer maps requests to actor messages and does not orchestrate database operations.
 
@@ -136,14 +151,16 @@ There is no Web BFF or proxy boundary. External .NET applications can use `Nativ
 ## Tests And Sample
 
 - NDL tests cover lexer/parser diagnostics, formatting, and plan compilation.
-- Engine tests cover durable NDJSON, query/append semantics, writer locking, partition rollover, recovery/truncation/corruption, and state checkpoint construction, restore, validation, and fallback.
+- Engine tests cover durable NDJSON, query/append semantics, writer locking, partition rollover, recovery/truncation/corruption, state checkpoint construction/restore/validation/fallback, and equivalence coverage for the pure decision-model and index-combination benchmark seams.
 - SDK tests cover attributes/descriptors, deterministic tags, fluent type states, query translation, plan compilation, and protocol mapping.
 - Analyzer/generator tests cover current diagnostics and deterministic factory generation.
-- Server integration tests start the ASP.NET/Orleans host with a temporary root and cover database creation, catalog persistence, commands, retries, reads/follow, schemas, indexes, state files, lock failure with snapshot-read availability, multi-decision NDL statements, SDK plans, remote prepare/complete behavior, restart, and a full SDK flow across all six protocol services. A dedicated gRPC-Web integration test exercises browser-style unary and server-streaming calls through the configured CORS origin.
-- The end-to-end project has an in-process authoring-equivalence test and a process-level test that launches the built server on isolated ports with a temporary database root. The process test loads the exact sample `CourseSubscriptions.ndl`, registers generated schemas and NDL/SDK handlers, subscribes, executes local and remote commands, replays remote completion, and verifies streamed and persisted events through the real transport and storage path.
-- `samples/CourseSubscriptions` runs both analyzer projects and exposes explicit `seed`, `run`, and `remote` modes. Seed mode idempotently creates the database and registers all four schemas plus both NDL handlers and the fluent SDK handler without publishing events. Run mode seeds first and executes the local course/subscription scenario. Remote mode seeds, defines a course, prepares the SDK handler model, evaluates that model in the client, and completes with a proposed event. The process-level end-to-end test launches seed mode twice, verifies the catalog at head zero, and then verifies local and remote live/persisted events plus idempotent remote replay.
+- Server integration tests start the ASP.NET/Orleans host with a temporary root and cover database creation, catalog persistence, commands, retries, reads/follow, schemas, indexes, state files, lock failure with snapshot-read availability, multi-decision NDL statements, SDK plans, remote prepare/complete behavior, restart, and a full SDK flow across all six protocol services. Native Commerce coverage adds deterministic fixtures, idempotent catalog seeding, a complete ordered lifecycle, contention, duplicate reconciliation, typed remote payment completion, stale capabilities, and durable restart. A dedicated gRPC-Web integration test exercises browser-style unary and server-streaming calls through the configured CORS origin.
+- The end-to-end project has an in-process authoring-equivalence test and a Commerce process E2E test, `CommerceSampleProcessTests`, that launches the built server on isolated ports with a temporary database root. The process test runs the Commerce sample's idempotent seeder twice, verifies the complete catalog at head zero, subscribes, executes `PublishProduct` through NDL and fluent SDK handlers, completes and replays a remote SDK decision, and verifies streamed and persisted events through the real transport and storage path.
+- `samples/Commerce/NativeDCB.Commerce` provides the 21 command and 26 event contracts, generated schemas, the 21 decisions in `NativeCommerce.ndl`, three fluent SDK decisions, typed preparation models, deterministic fixtures, and the idempotent catalog seeder for Native Commerce. It is the repository consumer of both Roslyn analyzer projects and the generated schema factory.
+- `samples/Commerce/NativeDCB.Commerce.Sample` is the sole sample application and exposes `seed`, `run`, `contention`, `remote-payment`, and `recovery` modes. Every mode seeds first; the scenarios execute a complete commerce lifecycle, verify domain invariants under contention, demonstrate trusted remote payment completion, and reconcile duplicate commands.
+- Benchmark executables are normal non-test projects. They build with the solution, are not discovered by `dotnet test`, and run only when invoked explicitly.
 
-The sample keeps its host and NDL document at the project root and groups domain types physically into `Commands`, `Events`, and `Models`.
+The Commerce sample keeps its executable host at the application project root and `NativeCommerce.ndl` at the reusable domain project root. Domain types are grouped physically into `Commands`, `Events`, `Models`, and `Fixtures`.
 
 All current tests use xUnit and temporary directories where storage is involved.
 
@@ -151,6 +168,6 @@ Test files mirror the corresponding physical production areas where useful, whil
 
 ## Not Yet Implemented
 
-The current structure does not contain authentication/authorization, audit persistence, metrics/tracing setup, multi-silo storage coordination, backup/restore, compaction/retention, grouped write buffering, model-only plans, or package publishing/release infrastructure. Packages can be built locally, but no automated publication or signed release pipeline is configured.
+The current structure does not contain authentication/authorization, audit persistence, production metrics/tracing setup, multi-silo storage coordination, backup/restore, compaction/retention, grouped write buffering, model-only plans, or package publishing/release infrastructure. Packages can be built locally, but no automated publication or signed release pipeline is configured.
 
 See [Requirements](requirements.md) for the requirement status matrix and [Database Lifecycle](database-lifecycle.md) for exact operational behavior.
