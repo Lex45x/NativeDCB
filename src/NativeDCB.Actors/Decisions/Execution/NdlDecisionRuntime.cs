@@ -6,6 +6,7 @@ using NativeDCB.Actors.Catalog.Schemas;
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Mapping;
 using NativeDCB.Actors.Messages;
+using NativeDCB.Actors.Observability;
 using NativeDCB.Model.Decisions;
 using NativeDCB.Model.Events;
 using NativeDCB.Model.Events.Appending;
@@ -76,6 +77,8 @@ internal sealed class NdlDecisionRuntime
                 cancellationToken);
             if (append.Outcome == AppendResultOutcome.Conflict)
             {
+                ActorTelemetry.DecisionRetries.Add(1,
+                    new KeyValuePair<string, object?>("operation", "execute"));
                 continue;
             }
 

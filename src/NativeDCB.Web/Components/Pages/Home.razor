@@ -378,6 +378,49 @@ else if (activeService.Name == "Authentication")
         </RpcCard>
     </div>
 }
+else if (activeService.Name == "Audit")
+{
+    <div class="shared-range">
+        <label>
+            <span>After sequence <small>exclusive</small></span><input type="number" min="0" @bind="auditAfterSequence">
+        </label>
+        <label>
+            <span>Limit <small>1..1000</small></span><input type="number" min="1" max="1000" @bind="auditLimit">
+        </label>
+    </div>
+    <div class="rpc-grid two-up">
+        <RpcCard Title="ListAuditRecords" Note="Read one bounded page from the durable global audit journal.">
+            <div class="field-pair">
+                <label>
+                    <span>Database <small>exact, optional</small></span><input @bind="auditDatabase" @bind:event="oninput">
+                </label>
+                <label>
+                    <span>Operation <small>exact, optional</small></span><input @bind="auditOperation" @bind:event="oninput">
+                </label>
+            </div>
+            <div class="field-pair">
+                <label>
+                    <span>Phase <small>exact, optional</small></span><input @bind="auditPhase" @bind:event="oninput">
+                </label>
+                <label>
+                    <span>Outcome <small>exact, optional</small></span><input @bind="auditOutcome" @bind:event="oninput">
+                </label>
+            </div>
+            <div class="field-pair">
+                <label>
+                    <span>Authentication scheme <small>exact, optional</small></span><input @bind="auditAuthenticationScheme" @bind:event="oninput">
+                </label>
+                <label>
+                    <span>Subject <small>exact, optional</small></span><input @bind="auditSubject" @bind:event="oninput">
+                </label>
+            </div>
+            <div class="button-row">
+                <button class="button button-run" @onclick="ListAuditRecordsAsync" disabled="@busy">List records</button>
+                <button class="button" @onclick="NextAuditRecordsPageAsync" disabled="@(busy || !auditHasMore)">Next page</button>
+            </div>
+        </RpcCard>
+    </div>
+}
 else
 {
     <div class="statement-callout">
@@ -494,6 +537,16 @@ else
     private string apiKeyPermissions = "grpc:*:*\nhandler:*/*:*\napikey:*:*";
     private string apiKeyExpiresUtc = string.Empty;
     private string apiKeyId = string.Empty;
+    private long auditAfterSequence;
+    private long auditNextAfterSequence;
+    private uint auditLimit = 100;
+    private string auditDatabase = string.Empty;
+    private string auditOperation = string.Empty;
+    private string auditPhase = string.Empty;
+    private string auditOutcome = string.Empty;
+    private string auditAuthenticationScheme = string.Empty;
+    private string auditSubject = string.Empty;
+    private bool auditHasMore;
 
     private string ConnectionClass => connectionStatus == "server available"
         ? "online"
@@ -696,7 +749,25 @@ else
         return RunUnaryAsync("Authentication.RevokeApiKey", token => Console.RevokeApiKeyAsync(apiKeyId, token));
     }
 
-    private async Task RunUnaryAsync(string rpc, Func<CancellationToken, Task<string>> operation)
+    private Task ListAuditRecordsAsync()
+    {
+        auditHasMore = false;
+        return RunUnaryAsync("Audit.ListAuditRecords", token => Console.ListAuditRecordsAsync(
+            auditAfterSequence, auditLimit, auditDatabase, auditOperation, auditPhase, auditOutcome,
+            auditAuthenticationScheme, auditSubject, token), UpdateAuditPage);
+    }
+
+    private async Task NextAuditRecordsPageAsync()
+    {
+        if (!auditHasMore) return;
+        auditAfterSequence = auditNextAfterSequence;
+        await ListAuditRecordsAsync();
+    }
+
+    private async Task RunUnaryAsync(
+        string rpc,
+        Func<CancellationToken, Task<string>> operation,
+        Action<string>? onSuccess = null)
     {
         if (busy) return;
         var source = StartOperation(rpc);
@@ -704,6 +775,7 @@ else
         {
             var json = await operation(source.Token);
             Append(rpc, json);
+            onSuccess?.Invoke(json);
             connectionStatus = "server available";
         }
         catch (Exception) when (source.IsCancellationRequested)
@@ -787,6 +859,18 @@ else
             _ => exception.Message
         };
         if (exception is RpcException { StatusCode: StatusCode.Unavailable }) connectionStatus = "server unavailable";
+    }
+
+    private void UpdateAuditPage(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement root = document.RootElement;
+        auditNextAfterSequence = root.TryGetProperty("nextAfterSequence", out JsonElement next)
+            ? next.ValueKind == JsonValueKind.String
+                ? long.Parse(next.GetString()!)
+                : next.GetInt64()
+            : 0;
+        auditHasMore = root.TryGetProperty("hasMore", out JsonElement hasMore) && hasMore.GetBoolean();
     }
 
     private async Task HandleNdlKeyDownAsync(KeyboardEventArgs args)

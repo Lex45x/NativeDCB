@@ -185,6 +185,52 @@ public sealed class NativeDcbClientTests
     }
 
     [Fact]
+    public async Task Audit_list_maps_cursor_limit_exact_filters_and_preserves_response()
+    {
+        ListAuditRecordsResponse response = new() { NextAfterSequence = 25, HasMore = true, BoundarySequence = 50 };
+        UnaryCallInvoker invoker = new(_ => response);
+        using NativeDcbClient client = CreateFullClient(invoker);
+
+        ListAuditRecordsResponse actual = await client.ListAuditRecordsAsync(
+            afterSequence: 10,
+            limit: 25,
+            database: "school",
+            operation: "/nativedcb.v1.CommandService/ExecuteHandler",
+            phase: "outcome",
+            outcome: "committed",
+            authenticationScheme: "ApiKey",
+            subject: "key-1");
+
+        ListAuditRecordsRequest request = Assert.IsType<ListAuditRecordsRequest>(invoker.Request);
+        Assert.Equal(expected: 10, request.AfterSequence);
+        Assert.Equal(expected: 25u, request.Limit);
+        Assert.Equal("school", request.Database);
+        Assert.Equal("/nativedcb.v1.CommandService/ExecuteHandler", request.Operation);
+        Assert.Equal("outcome", request.Phase);
+        Assert.Equal("committed", request.Outcome);
+        Assert.Equal("ApiKey", request.AuthenticationScheme);
+        Assert.Equal("key-1", request.Subject);
+        Assert.Same(response, actual);
+    }
+
+    [Fact]
+    public void Audit_list_omits_unsupplied_filters_and_validates_bounds()
+    {
+        ListAuditRecordsRequest request = NativeDcbClient.BuildListAuditRecordsRequest();
+
+        Assert.False(request.HasDatabase);
+        Assert.False(request.HasOperation);
+        Assert.False(request.HasPhase);
+        Assert.False(request.HasOutcome);
+        Assert.False(request.HasAuthenticationScheme);
+        Assert.False(request.HasSubject);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            NativeDcbClient.BuildListAuditRecordsRequest(afterSequence: -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            NativeDcbClient.BuildListAuditRecordsRequest(limit: 1001));
+    }
+
+    [Fact]
     public void Query_request_maps_model_query_without_losing_order()
     {
         EventQuery query = new(
@@ -278,6 +324,19 @@ public sealed class NativeDcbClientTests
             new EventService.EventServiceClient(invoker),
             new CatalogService.CatalogServiceClient(invoker),
             jsonOptions);
+    }
+
+    private static NativeDcbClient CreateFullClient(CallInvoker invoker)
+    {
+        return new NativeDcbClient(
+            new DatabaseService.DatabaseServiceClient(invoker),
+            new CatalogService.CatalogServiceClient(invoker),
+            new CommandService.CommandServiceClient(invoker),
+            new EventService.EventServiceClient(invoker),
+            new StatementService.StatementServiceClient(invoker),
+            new AdministrationService.AdministrationServiceClient(invoker),
+            new AuthenticationService.AuthenticationServiceClient(invoker),
+            new AuditService.AuditServiceClient(invoker));
     }
 
     private sealed record TestCommand(

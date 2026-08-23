@@ -49,6 +49,7 @@ internal static class HelpText
                                  auth create-api-key                   AuthenticationService.CreateApiKey
                                  auth list-api-keys                    AuthenticationService.ListApiKeys
                                  auth revoke-api-key                   AuthenticationService.RevokeApiKey
+                                 audit list                            AuditService.ListAuditRecords
 
                                Input conventions:
                                  JSON: --schema JSON | --schema-file PATH | --schema-stdin (similarly command, plan, query)
@@ -155,7 +156,13 @@ internal static class HelpText
         ["auth create-api-key"] =
             "Usage: nativedcb auth create-api-key --label TEXT --permission SCOPE [--permission SCOPE ...] [--expires ISO-8601]",
         ["auth list-api-keys"] = "Usage: nativedcb auth list-api-keys",
-        ["auth revoke-api-key"] = "Usage: nativedcb auth revoke-api-key --key-id ID"
+        ["auth revoke-api-key"] = "Usage: nativedcb auth revoke-api-key --key-id ID",
+        ["audit list"] = """
+                           Usage: nativedcb audit list [--after SEQUENCE] [--limit 1..1000]
+                                      [--database NAME] [--operation NAME] [--phase NAME] [--outcome NAME]
+                                      [--authentication-scheme NAME] [--subject NAME]
+                           Filters are optional exact matches. One response page is written per invocation.
+                           """
     };
 
     public static bool TryGetCommand(string command, out string text)

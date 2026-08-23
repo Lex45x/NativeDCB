@@ -1,5 +1,9 @@
+using System.Diagnostics;
+
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Messages;
+using NativeDCB.Actors.Observability;
 using NativeDCB.Actors.Storage;
 
 namespace NativeDCB.Actors.Grains;
@@ -54,6 +58,40 @@ public sealed class StateOrchestratorGrain(ActorStoragePath storage, IGrainFacto
     }
 
     public async Task<AdministrationOperationResultMessage> RequestStateRebuildAsync(
+        uint partitionNumber,
+        GrainCancellationToken cancellationToken)
+    {
+        long started = Stopwatch.GetTimestamp();
+        AdministrationOperationResultMessage result;
+        try
+        {
+            result = await RequestStateRebuildCoreAsync(partitionNumber, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException)
+        {
+            RecordMaintenance("state_rebuild", "cancelled", started);
+            await AuditRecorder.OutcomeAsync(grains, "cancelled")
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+        catch (Exception)
+        {
+            RecordMaintenance("state_rebuild", "failed", started);
+            await AuditRecorder.OutcomeAsync(grains, "failed", "unexpected")
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+
+        string outcome = result.Error is null ? "dispatched" : "failed";
+        RecordMaintenance("state_rebuild", outcome, started);
+        await AuditRecorder.OutcomeAsync(
+                grains, outcome, result.Error?.Kind.ToString())
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        return result;
+    }
+
+    private async Task<AdministrationOperationResultMessage> RequestStateRebuildCoreAsync(
         uint partitionNumber,
         GrainCancellationToken cancellationToken)
     {
@@ -116,5 +154,16 @@ public sealed class StateOrchestratorGrain(ActorStoragePath storage, IGrainFacto
     private static AdministrationErrorMessage Error(AdministrationErrorKind kind, string message)
     {
         return new AdministrationErrorMessage(kind, message);
+    }
+
+    private static void RecordMaintenance(string kind, string outcome, long started)
+    {
+        ActorTelemetry.MaintenanceOperations.Add(1,
+            new KeyValuePair<string, object?>("kind", kind),
+            new KeyValuePair<string, object?>("outcome", outcome));
+        ActorTelemetry.MaintenanceDuration.Record(
+            Stopwatch.GetElapsedTime(started).TotalSeconds,
+            new KeyValuePair<string, object?>("kind", kind),
+            new KeyValuePair<string, object?>("outcome", outcome));
     }
 }

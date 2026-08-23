@@ -2,8 +2,10 @@ using Google.Protobuf;
 
 using Grpc.Core;
 
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Messages;
+using NativeDCB.Actors.Storage;
 using NativeDCB.Protocol.V1;
 using NativeDCB.Server.Decisions.Transactions;
 using NativeDCB.Server.Grpc.Infrastructure;
@@ -34,10 +36,23 @@ public sealed class CatalogGrpcService(IGrainFactory grains) : CatalogService.Ca
         RemoveSchemaRequest request,
         ServerCallContext context)
     {
+        await ValidateAuditedDatabaseAsync(request.Database).ConfigureAwait(false);
+        ActorSchemaKind kind;
+        try
+        {
+            kind = ToActorKind(request.SchemaKind);
+        }
+        catch (RpcException exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "invalid", exception.StatusCode.ToString())
+                .ConfigureAwait(false);
+            throw;
+        }
+
         ISchemaGrain grain = grains.GetGrain<ISchemaGrain>(request.Database);
         SchemaRemoveResultMessage? result = await CallAsync(
                 token => grain.RemoveAsync(
-                    new SchemaLookupMessage(request.SchemaName, ToActorKind(request.SchemaKind)), token),
+                    new SchemaLookupMessage(request.SchemaName, kind), token),
                 context.CancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
         if (result is null)
@@ -187,6 +202,7 @@ public sealed class CatalogGrpcService(IGrainFactory grains) : CatalogService.Ca
         ActorSchemaKind kind,
         CancellationToken cancellationToken)
     {
+        await ValidateAuditedDatabaseAsync(request.Database).ConfigureAwait(false);
         ISchemaGrain grain = grains.GetGrain<ISchemaGrain>(request.Database);
         SchemaRegistrationResultMessage result = await CallAsync(
                 token => grain.RegisterAsync(new RegisterSchemaMessage(
@@ -200,6 +216,20 @@ public sealed class CatalogGrpcService(IGrainFactory grains) : CatalogService.Ca
         RegisterSchemaResponse response = new() { Fingerprint = result.Fingerprint };
         response.Diagnostics.AddRange(result.Diagnostics.Select(ToDiagnostic));
         return response;
+    }
+
+    private async Task ValidateAuditedDatabaseAsync(string database)
+    {
+        try
+        {
+            _ = ActorStoragePath.NormalizeDatabaseName(database);
+        }
+        catch (ArgumentException exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "invalid", nameof(StatusCode.InvalidArgument))
+                .ConfigureAwait(false);
+            throw ProtocolMapper.InvalidArgument(exception.Message);
+        }
     }
 
     private static async Task<T> CallAsync<T>(

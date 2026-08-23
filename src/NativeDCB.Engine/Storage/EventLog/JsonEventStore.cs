@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Threading.Channels;
 
+using NativeDCB.Engine.Observability;
 using NativeDCB.Engine.Storage.State;
 using NativeDCB.Model;
 using NativeDCB.Model.Events;
@@ -177,6 +179,44 @@ internal sealed class JsonEventStore : IAsyncDisposable
         EventBatch batch,
         AppendCondition condition,
         CancellationToken cancellationToken = default)
+    {
+        long started = Stopwatch.GetTimestamp();
+        // The explicit operation name is part of the telemetry contract.
+        // ReSharper disable once ExplicitCallerInfoArgument
+        using Activity? activity = EngineTelemetry.Activities.StartActivity("event_store.append", ActivityKind.Internal);
+        activity?.SetTag("nativedcb.command_id", batch.CommandId.ToString("D"));
+        activity?.SetTag("nativedcb.event_count", batch.Events.Count);
+        try
+        {
+            AppendResult result = await AppendCoreAsync(batch, condition, cancellationToken).ConfigureAwait(false);
+            string outcome = result.Outcome.ToString().ToLowerInvariant();
+            if (result.Outcome == AppendOutcome.Committed)
+            {
+                EngineTelemetry.EventsCommitted.Add(result.Events.Count,
+                    new KeyValuePair<string, object?>("operation", "append"));
+            }
+
+            EngineTelemetry.AppendDuration.Record(
+                Stopwatch.GetElapsedTime(started).TotalSeconds,
+                new KeyValuePair<string, object?>("outcome", outcome));
+            activity?.SetTag("append.outcome", outcome);
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            return result;
+        }
+        catch (Exception exception)
+        {
+            EngineTelemetry.AppendDuration.Record(
+                Stopwatch.GetElapsedTime(started).TotalSeconds,
+                new KeyValuePair<string, object?>("outcome", "failed"));
+            activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+            throw;
+        }
+    }
+
+    private async Task<AppendResult> AppendCoreAsync(
+        EventBatch batch,
+        AppendCondition condition,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(condition);

@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text.Json;
 
 using Google.Protobuf;
@@ -432,6 +435,21 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
             PartitionNumber = 1
         });
         Assert.True(rebuild.Accepted);
+
+        string[] outcomes = [];
+        for (int attempt = 0; attempt < 50; attempt++)
+        {
+            outcomes = await AuditOutcomesAsync(
+                "/nativedcb.v1.AdministrationService/RequestStateRebuild");
+            if (outcomes.Contains("completed", StringComparer.Ordinal))
+            {
+                break;
+            }
+
+            await Task.Delay(millisecondsDelay: 20);
+        }
+
+        Assert.Equal(["dispatched", "completed"], outcomes);
     }
 
     [Fact]
@@ -719,6 +737,9 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
         RegisterHandlerResponse handler = await RegisterAsync(
             catalog, "DefineCourse", "DefineCourse", CreateCourseNdl);
         Assert.True(handler.Handler.Valid);
+        RegisterHandlerResponse unchangedHandler = await RegisterAsync(
+            catalog, "DefineCourse", "DefineCourse", CreateCourseNdl);
+        Assert.Equal(handler.Handler.PlanFingerprint, unchangedHandler.Handler.PlanFingerprint);
 
         ExecuteHandlerResponse invalid = await ExecuteAsync(
             commands, "DefineCourse", Guid.NewGuid(), new { CourseId = "course-invalid" });
@@ -746,6 +767,25 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
             SchemaDocumentJson = ByteString.CopyFromUtf8(incompatibleSchema)
         });
         Assert.Contains(incompatible.Diagnostics, value => value.Code == "SCHEMA2001");
+
+        AuditService.AuditServiceClient audit = new(_channel);
+        ListAuditRecordsResponse handlerAudit = await audit.ListAuditRecordsAsync(new ListAuditRecordsRequest
+        {
+            Database = "school",
+            Operation = "/nativedcb.v1.CatalogService/RegisterHandler",
+            Phase = "outcome",
+            Limit = 100
+        });
+        Assert.Equal(["created", "unchanged"], handlerAudit.Records.Select(value => value.Outcome));
+
+        ListAuditRecordsResponse schemaAudit = await audit.ListAuditRecordsAsync(new ListAuditRecordsRequest
+        {
+            Database = "school",
+            Operation = "/nativedcb.v1.CatalogService/RegisterEventSchema",
+            Phase = "outcome",
+            Limit = 100
+        });
+        Assert.Contains(schemaAudit.Records, value => value.Outcome == "incompatible");
     }
 
     [Fact]
@@ -850,6 +890,30 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
     [Fact]
     public async Task Full_sdk_client_executes_database_statement_decision_and_administration_flow()
     {
+        ConcurrentQueue<string> activities = new();
+        using ActivityListener activityListener = new()
+        {
+            ShouldListenTo = source => source.Name == "NativeDCB.Actors",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity => activities.Enqueue(activity.OperationName)
+        };
+        ActivitySource.AddActivityListener(activityListener);
+
+        ConcurrentQueue<(string Name, string[] Tags)> measurements = new();
+        using MeterListener meterListener = new();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == "NativeDCB.Actors")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((instrument, _, tags, _) =>
+            measurements.Enqueue((instrument.Name, tags.ToArray().Select(tag => tag.Key).ToArray())));
+        meterListener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
+            measurements.Enqueue((instrument.Name, tags.ToArray().Select(tag => tag.Key).ToArray())));
+        meterListener.Start();
+
         using NativeDcbClient client = new(
             new DatabaseService.DatabaseServiceClient(_channel),
             new CatalogService.CatalogServiceClient(_channel),
@@ -897,6 +961,88 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
         Assert.Equal(ExecuteHandlerResponse.OutcomeOneofCase.Committed, sdk.OutcomeCase);
         Assert.Equal(expected: 3, (await client.GetHeadAsync("school")).EventId);
         Assert.NotEmpty((await client.ListPartitionsAsync("school")).Partitions);
+
+        AuditService.AuditServiceClient audit = new(_channel);
+        ListAuditRecordsResponse decisionAudit = await audit.ListAuditRecordsAsync(new ListAuditRecordsRequest
+        {
+            Database = "school",
+            Operation = "/nativedcb.v1.CommandService/ExecuteHandler",
+            Limit = 100
+        });
+        Assert.Equal(expected: 3, decisionAudit.Records.Count(record => record.Phase == "attempt"));
+        Assert.Equal(expected: 3, decisionAudit.Records.Count(record =>
+            record.Phase == "outcome" && record.Outcome == "committed"));
+        Assert.All(decisionAudit.Records.Where(record => record.Phase == "outcome"), record =>
+        {
+            Assert.True(record.HasCommandId);
+            Assert.True(record.HasFirstEventId);
+            Assert.True(record.HasLastEventId);
+        });
+        Assert.Contains("decision.execute", activities);
+        Assert.Contains("query", activities);
+        Assert.Contains(measurements, value => value.Name == "nativedcb.decisions");
+        Assert.Contains(measurements, value => value.Name == "nativedcb.queries");
+        Assert.Contains(measurements, value => value.Name == "nativedcb.database.transitions");
+        Assert.DoesNotContain(measurements.SelectMany(value => value.Tags), tag =>
+            tag is "database" or "handler" or "subject" or "command_id" or "event_type");
+    }
+
+    [Fact]
+    public async Task Audited_transport_validation_records_invalid_outcomes()
+    {
+        DatabaseService.DatabaseServiceClient databases = new(_channel);
+        CommandService.CommandServiceClient commands = new(_channel);
+        CatalogService.CatalogServiceClient catalog = new(_channel);
+        AdministrationService.AdministrationServiceClient administration = new(_channel);
+        AuditService.AuditServiceClient audit = new(_channel);
+        await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "school" });
+
+        RpcException invalidCommand = await Assert.ThrowsAsync<RpcException>(async () =>
+            await commands.ExecuteHandlerAsync(new ExecuteHandlerRequest
+            {
+                Database = "school",
+                HandlerName = "missing",
+                CommandId = "not-a-uuid"
+            }));
+        Assert.Equal(StatusCode.InvalidArgument, invalidCommand.StatusCode);
+
+        RpcException invalidSchema = await Assert.ThrowsAsync<RpcException>(async () =>
+            await catalog.RemoveSchemaAsync(new RemoveSchemaRequest
+            {
+                Database = "school",
+                SchemaName = "missing"
+            }));
+        Assert.Equal(StatusCode.InvalidArgument, invalidSchema.StatusCode);
+
+        RpcException invalidRebuild = await Assert.ThrowsAsync<RpcException>(async () =>
+            await administration.RequestIndexRebuildAsync(new RequestIndexRebuildRequest
+            {
+                Database = "school"
+            }));
+        Assert.Equal(StatusCode.InvalidArgument, invalidRebuild.StatusCode);
+
+        foreach (string operation in new[]
+                 {
+                     "/nativedcb.v1.CommandService/ExecuteHandler",
+                     "/nativedcb.v1.CatalogService/RemoveSchema",
+                     "/nativedcb.v1.AdministrationService/RequestIndexRebuild"
+                 })
+        {
+            ListAuditRecordsResponse records = await audit.ListAuditRecordsAsync(new ListAuditRecordsRequest
+            {
+                Database = "school",
+                Operation = operation,
+                Limit = 100
+            });
+            Assert.Collection(records.Records,
+                attempt => Assert.Equal("attempt", attempt.Phase),
+                outcome =>
+                {
+                    Assert.Equal("outcome", outcome.Phase);
+                    Assert.Equal("invalid", outcome.Outcome);
+                });
+            Assert.Equal(records.Records[0].OperationId, records.Records[1].OperationId);
+        }
     }
 
     [Fact]
@@ -935,6 +1081,10 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
             ]);
         Assert.Equal(CompleteDecisionResponse.OutcomeOneofCase.AlreadyCommitted, replayed.OutcomeCase);
         Assert.Equal(expected: 2, replayed.AlreadyCommitted.FirstEventId);
+        Assert.Equal(["prepared"], await AuditOutcomesAsync(
+            "/nativedcb.v1.CommandService/PrepareDecision"));
+        Assert.Equal(["committed", "already_committed"], await AuditOutcomesAsync(
+            "/nativedcb.v1.CommandService/CompleteDecision"));
     }
 
     [Fact]
@@ -989,6 +1139,8 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
         Assert.Equal("InvalidEvents", completed.Failed.Error.Code);
         Assert.Equal(expected: 1, (await new DatabaseService.DatabaseServiceClient(_channel)
             .GetHeadAsync(new GetHeadRequest { Database = "school" })).EventId);
+        Assert.Contains("failed", await AuditOutcomesAsync(
+            "/nativedcb.v1.CommandService/CompleteDecision"));
     }
 
     [Fact]
@@ -1056,6 +1208,8 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
         IReadOnlyList<EventEnvelope> persisted = await ReadAllAsync(new EventService.EventServiceClient(_channel)
             .ReadEventsByRange(new ReadEventsByRangeRequest { Database = "school", AfterEventId = 0 }).ResponseStream);
         Assert.Equal(expected: 2, persisted.Count);
+        Assert.Contains("stale", await AuditOutcomesAsync(
+            "/nativedcb.v1.CommandService/CompleteDecision"));
     }
 
     [Fact]
@@ -1113,6 +1267,8 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
         Assert.Equal(prepared.ExpiresUtc, completed.Expired.ExpiresUtc.ToDateTimeOffset());
         Assert.Equal(expected: 1, (await new DatabaseService.DatabaseServiceClient(_channel)
             .GetHeadAsync(new GetHeadRequest { Database = "school" })).EventId);
+        Assert.Contains("expired", await AuditOutcomesAsync(
+            "/nativedcb.v1.CommandService/CompleteDecision"));
     }
 
     [Theory]
@@ -1161,6 +1317,8 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
         Assert.Equal("HandlerChanged", completed.Invalidated.Code);
         Assert.Equal(expected: 1, (await new DatabaseService.DatabaseServiceClient(_channel)
             .GetHeadAsync(new GetHeadRequest { Database = "school" })).EventId);
+        Assert.Contains("invalidated", await AuditOutcomesAsync(
+            "/nativedcb.v1.CommandService/CompleteDecision"));
     }
 
     [Fact]
@@ -1280,6 +1438,19 @@ public sealed partial class NativeDcbServerTests : IAsyncLifetime
             CommandId = commandId.ToString("D"),
             CommandJson = ByteString.CopyFromUtf8(JsonSerializer.Serialize(command))
         });
+    }
+
+    private async Task<string[]> AuditOutcomesAsync(string operation)
+    {
+        ListAuditRecordsResponse records = await new AuditService.AuditServiceClient(_channel)
+            .ListAuditRecordsAsync(new ListAuditRecordsRequest
+            {
+                Database = "school",
+                Operation = operation,
+                Phase = "outcome",
+                Limit = 100
+            });
+        return records.Records.Select(value => value.Outcome).ToArray();
     }
 
     private static async Task<IReadOnlyList<EventEnvelope>> ReadAllAsync(IAsyncStreamReader<EventEnvelope> stream)

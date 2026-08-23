@@ -23,7 +23,7 @@ The suite is intended to answer where time and memory are spent, how costs grow 
 
 - Benchmarks are not part of the ordinary unit-test timing contract.
 - Shared hosted CI results are not treated as stable regression baselines.
-- The initial suite does not add production metrics, tracing, or benchmark-specific public APIs.
+- The benchmark suite does not add benchmark-specific public APIs. Production OpenTelemetry is configured by the server and explicitly disabled for baseline child-process measurements.
 - Client concurrency is not presented as parallel writing inside one database; Main serializes each database's durable appends.
 - Profiled runs are not compared directly with unprofiled throughput runs.
 

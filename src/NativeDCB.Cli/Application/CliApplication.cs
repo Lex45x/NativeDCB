@@ -138,6 +138,7 @@ internal static class CliApplication
         StatementService.StatementServiceClient statements = new(channel);
         AdministrationService.AdministrationServiceClient administration = new(channel);
         AuthenticationService.AuthenticationServiceClient authentication = new(channel);
+        AuditService.AuditServiceClient audit = new(channel);
 
         switch (command)
         {
@@ -452,6 +453,53 @@ internal static class CliApplication
                 return await UnaryAsync(authentication.RevokeApiKeyAsync(
                     new RevokeApiKeyRequest { KeyId = arguments.Required("key-id") },
                     cancellationToken: cancellationToken));
+            case "audit list":
+                arguments.EnsureAllowed(
+                    "after", "limit", "database", "operation", "phase", "outcome",
+                    "authentication-scheme", "subject");
+                uint auditLimit = arguments.OptionalUInt32("limit") ?? 0;
+                if (auditLimit > 1000)
+                {
+                    throw new CliUsageException("Option --limit cannot exceed 1000.");
+                }
+
+                ListAuditRecordsRequest auditRequest = new()
+                {
+                    AfterSequence = arguments.Int64("after", defaultValue: 0, nonNegative: true),
+                    Limit = auditLimit
+                };
+                if (arguments.Optional("database") is { } auditDatabase)
+                {
+                    auditRequest.Database = auditDatabase;
+                }
+
+                if (arguments.Optional("operation") is { } auditOperation)
+                {
+                    auditRequest.Operation = auditOperation;
+                }
+
+                if (arguments.Optional("phase") is { } auditPhase)
+                {
+                    auditRequest.Phase = auditPhase;
+                }
+
+                if (arguments.Optional("outcome") is { } auditOutcome)
+                {
+                    auditRequest.Outcome = auditOutcome;
+                }
+
+                if (arguments.Optional("authentication-scheme") is { } auditScheme)
+                {
+                    auditRequest.AuthenticationScheme = auditScheme;
+                }
+
+                if (arguments.Optional("subject") is { } auditSubject)
+                {
+                    auditRequest.Subject = auditSubject;
+                }
+
+                return await UnaryAsync(audit.ListAuditRecordsAsync(
+                    auditRequest, cancellationToken: cancellationToken));
             default:
                 throw new CliUsageException($"Unknown command '{command}'.");
         }

@@ -11,14 +11,14 @@ Queries contain ORed items. Event types in an item are ORed; all keys in an item
 
 ## Transports And Clients
 
-Every RPC in all seven services is available over both transports:
+Every RPC in all eight services is available over both transports:
 
 - Native gRPC over HTTP/2 is the transport for the .NET SDK, CLI, sample, and other non-browser generated clients. The default native endpoint is `http://localhost:5010`.
-- gRPC-Web is enabled on all seven mapped services for browser clients. The server's `https` launch profile exposes `https://localhost:7154` as well as the native `http://localhost:5010` endpoint.
+- gRPC-Web is enabled on all eight mapped services for browser clients. The server's `https` launch profile exposes `https://localhost:7154` as well as the native `http://localhost:5010` endpoint.
 
 The server reads browser origins from `GrpcWeb:AllowedOrigins` and exposes the gRPC status/error headers required by the client. Its defaults allow `http://localhost:5094` and `https://localhost:7229`, matching the Web launch profiles. A different static host origin must be added explicitly. CORS is enforced by browsers and is independent of the server's JWT/API-key authentication and scoped authorization.
 
-The repository has two operator clients with the complete 34-RPC surface:
+The repository has two operator clients with the complete 35-RPC surface:
 
 - `NativeDCB.Cli` maps one command to every RPC and uses native gRPC. See [CLI](cli.md).
 - `NativeDCB.Web` is a standalone Blazor WebAssembly application with explicit controls for every RPC, direct gRPC-Web calls, incremental stream output and cancellation, and a prominent NDL editor. It has no BFF.
@@ -38,7 +38,7 @@ All gRPC methods require a credential and their derived `grpc:<service>:<method>
 | `GetCapabilities` | Returns protocol/NDL `v1`, file format `1`, query features `range`, `type`, `keys`, `committed-scan`, subscriptions enabled, and the configured `MaxEventCountPerPartition` limit. |
 | `GetHead` | Lazily opens/recovers the database and returns the Main Writer committed head. |
 
-The server also exposes anonymous HTTP `GET /health/live` (`200`, `{live:true}`) and `GET /health/ready`. Readiness asks Database Directory for filesystem-discovered databases and is `200` only when every Main status is `Ready` or `Discovered` and no bootstrap API key remains active; otherwise it is `503`. An empty database root is ready only after API-key bootstrap has been replaced or when bootstrap readiness does not apply.
+The server also exposes anonymous HTTP `GET /health/live` (`200`, `{live:true}`) and `GET /health/ready`. Readiness asks Database Directory for filesystem-discovered databases and is `200` only when every Main status is `Ready` or `Discovered`, no bootstrap API key remains active, and the audit journal is healthy; otherwise it is `503`. An empty database root is ready only after API-key bootstrap has been replaced or when bootstrap readiness does not apply.
 
 ## CatalogService
 
@@ -55,7 +55,7 @@ The server also exposes anonymous HTTP `GET /health/live` (`200`, `{live:true}`)
 | `ListHandlers` | Lists current handlers ordered by name. |
 | `ValidateNdl` | Handler parses and performs limited semantic/schema validation without persistence. Event transient schemas participate; command transient schemas are accepted but not used for semantic validation. |
 
-Schema and Handler actors load independently of Main and serialize their own mutations. Reads expose current state, not superseded registrations or history. `allow_incompatible` affects schema replacement compatibility. It is carried for handlers but no handler compatibility override/audit logic is currently implemented.
+Schema and Handler actors load independently of Main and serialize their own mutations. Reads expose current state, not superseded registrations or history. `allow_incompatible` affects schema replacement compatibility. Handler registration is idempotent when the compiled plan is unchanged; `allow_incompatible` is carried for handlers but no separate compatibility override is implemented.
 
 Schema details are in [Requirements](requirements.md). Diagnostics currently include lexer/parser `NDL0001`-style codes, server `NDL2001`, plan `PLAN1001`/`PLAN2001`, and compatibility `SCHEMA2001`.
 
@@ -151,7 +151,7 @@ Current behavior is narrower than the result union suggests. It accepts an NDL d
 2. one `RegistrationResult(kind="handler")` per decision,
 3. a final `StatementCompletion`.
 
-It does **not** execute event reads, commands, schema statements, or administrative statements, and it does not emit `StatementResult.event` or `.command`. `allow_incompatible` is not used on this path. There is no statement audit/history persistence.
+It does **not** execute event reads, commands, schema statements, or administrative statements, and it does not emit `StatementResult.event` or `.command`. `allow_incompatible` is not used on this path. The publication attempt and outcome are audited, but NDL source and superseded statement history are not retained in the audit journal.
 
 ## AdministrationService
 
@@ -163,7 +163,7 @@ It does **not** execute event reads, commands, schema statements, or administrat
 | `RequestIndexRebuild` | Requires event type and keys. Index Orchestrator derives each identity directly, captures a partition-backed head, and awaits all Index actor rebuild calls before returning accepted. |
 | `RequestStateRebuild` | Requires a positive closed partition number. State Orchestrator validates it against Main's active partition and dispatches a one-way rebuild to that partition's State actor. |
 
-Index rebuild acceptance follows completion of the awaited actor calls, though each Index actor records derived-file faults in status rather than failing the RPC. State rebuild acceptance confirms one-way dispatch, not completion; poll status to observe it.
+Index rebuild acceptance follows completion of the awaited actor calls, though each Index actor records derived-file faults in status rather than failing the RPC. State rebuild acceptance confirms one-way dispatch, not completion; its later completion or fault is observable through audit and telemetry, and status can be polled for the resulting file.
 
 ## AuthenticationService
 
@@ -174,6 +174,12 @@ Index rebuild acceptance follows completion of the awaited actor calls, though e
 | `RevokeApiKey` | Atomically records revocation for the requested key identifier and returns its non-secret metadata. |
 
 These methods require their gRPC action permission plus `apikey:*:create`, `apikey:*:list`, or `apikey:<key-id>:revoke`, respectively. They return `FAILED_PRECONDITION` when the API-key provider is disabled.
+
+## AuditService
+
+`ListAuditRecords` reads the server-wide hash-chained journal in ascending global sequence order. `after_sequence` is exclusive; `limit=0` selects 100, and explicit limits are `1..1000`. Exact optional filters cover database, operation, phase, outcome, authentication scheme, and subject. The response includes `next_after_sequence`, `has_more`, and the committed `boundary_sequence` captured for the query. Sparse filtered pages advance by the last examined global sequence, so an empty page can still advance its cursor.
+
+The call requires `grpc:nativedcb.v1.AuditService:ListAuditRecords` plus `audit:<encoded-database>:read` for an exact database filter or `audit:*:read` when no database is supplied. Successful audit reads are not themselves journaled. See [Observability And Audit](observability-audit.md) for record fields, durability, failure behavior, and sensitive-data exclusions.
 
 ## Error Model
 
@@ -187,8 +193,8 @@ Normal command-domain outcomes stay in `ExecuteHandlerResponse`. The implemented
 | `FAILED_PRECONDITION` | State rebuild requested for the active or future partition; `PrepareDecision` or `CompleteDecision` called while `RemoteDecisions` is absent or invalid. |
 | `UNAUTHENTICATED` | Missing, malformed, unknown, expired, or revoked caller credential. |
 | `PERMISSION_DENIED` | Authenticated caller lacks an action/resource permission or attempts to delegate a permission it does not possess. |
-| `UNAVAILABLE` | Database not write-available, writer lock contention, event-store fault, I/O, or access failure. |
-| `DATA_LOSS` | Invalid/corrupt authoritative metadata or partition data. |
+| `UNAVAILABLE` | Database not write-available, writer lock contention, event-store fault, audit fail-closed state, I/O, or access failure. |
+| `DATA_LOSS` | Invalid/corrupt authoritative event or audit metadata/partition data. |
 | `INTERNAL` | Sanitized fallback for an unexpected service exception; the original exception is logged server-side. |
 | `CANCELLED` / `DEADLINE_EXCEEDED` | Standard gRPC request lifetime behavior. |
 
@@ -198,4 +204,4 @@ Every transport `RpcException` created by `ProtocolMapper` carries a serialized 
 
 ## Not Implemented
 
-Audit records, external statement history, pagination, protocol negotiation, configurable message limits, durable subscriptions, remote-decision retry orchestration, server retry hints, and standard `google.rpc.Status` details are future work. Remote preparation currently requires a normal executable handler plan with emissions; model-only plans remain separate future work and are not implemented by these RPCs.
+External statement history, general collection pagination beyond audit reads, protocol negotiation, configurable message limits, durable subscriptions, remote-decision retry orchestration, server retry hints, and standard `google.rpc.Status` details are future work. Remote preparation currently requires a normal executable handler plan with emissions; model-only plans remain separate future work and are not implemented by these RPCs.

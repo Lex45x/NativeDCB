@@ -1,7 +1,9 @@
 using Grpc.Core;
 
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Messages;
+using NativeDCB.Actors.Storage;
 using NativeDCB.Protocol.V1;
 using NativeDCB.Server.Decisions.Transactions;
 using NativeDCB.Server.Grpc.Infrastructure;
@@ -45,6 +47,17 @@ public sealed class StatementGrpcService(IGrainFactory grains) : StatementServic
         IServerStreamWriter<StatementResult> responseStream,
         ServerCallContext context)
     {
+        try
+        {
+            _ = ActorStoragePath.NormalizeDatabaseName(request.Database);
+        }
+        catch (ArgumentException exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "invalid", nameof(StatusCode.InvalidArgument))
+                .ConfigureAwait(false);
+            throw ProtocolMapper.InvalidArgument(exception.Message);
+        }
+
         PublishStatementResultMessage result = await CallAsync(
                 token => grains.GetGrain<IHandlerGrain>(request.Database).PublishStatementAsync(
                     new PublishStatementMessage(request.NdlSource), token),

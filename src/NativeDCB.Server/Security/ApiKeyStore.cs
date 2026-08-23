@@ -205,7 +205,7 @@ internal sealed class ApiKeyStore
         return _catalog.Keys.OrderBy(key => key.CreatedUtc).ThenBy(key => key.KeyId, StringComparer.Ordinal).ToArray();
     }
 
-    public async Task<ApiKeyRecord?> RevokeAsync(string keyId, CancellationToken cancellationToken)
+    public async Task<ApiKeyRevocation?> RevokeAsync(string keyId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyId);
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
@@ -222,7 +222,7 @@ internal sealed class ApiKeyStore
             ApiKeyRecord current = _catalog.Keys[index];
             if (current.RevokedUtc is not null)
             {
-                return current;
+                return new ApiKeyRevocation(current, AlreadyRevoked: true);
             }
 
             using FileStream catalogLock = AcquireCatalogLock();
@@ -232,7 +232,7 @@ internal sealed class ApiKeyStore
             ApiKeyCatalog replacement = new(ApiKeyCatalog.CurrentSchema, keys);
             await WriteAsync(replacement, cancellationToken).ConfigureAwait(false);
             _catalog = replacement;
-            return revoked;
+            return new ApiKeyRevocation(revoked, AlreadyRevoked: false);
         }
         finally
         {

@@ -30,12 +30,13 @@ This document does not remove unmet requirements. Each area is marked **Implemen
 | Read availability without writer ownership | Partial | Finite range reads, command-ID reconciliation, eventual-query fallbacks, index administration boundaries, and range-follow polling recover a committed head from shared partitions without opening Main. Authoritative query reads/subscriptions, mutations, state administration, and `GetHead` open Main; concurrent in-process activation/recovery has no separately specified synchronization guarantee. |
 | Buffered/grouped flush and pending reservations | Not implemented | Each append writes and flushes one batch under serialized writer access. |
 | Multi-silo deployment | Not implemented | Server uses `UseLocalhostClustering`; filesystem coordination is single-process. |
-| Native gRPC and browser gRPC-Web transports | Implemented | All seven services expose both transports; browser origins come from `GrpcWeb:AllowedOrigins`. |
-| Actor-only database access and orchestration | Implemented | All 31 database-operation RPCs route work through `NativeDCB.Actors`; the three authentication RPCs manage server security state. See [Actor Architecture](actor-architecture.md). |
-| Dedicated persistent-file ownership | Implemented | Main owns the event log, Schema owns `schemas_v1.json`, Handler owns `handlers_v1.json`, each Index actor owns one manifest/generation set, and each State actor owns one state file. |
+| Native gRPC and browser gRPC-Web transports | Implemented | All eight services expose both transports; browser origins come from `GrpcWeb:AllowedOrigins`. |
+| Actor-only database access and orchestration | Implemented | All 31 database-operation RPCs route work through `NativeDCB.Actors`; three authentication RPCs manage server security state and one audit RPC enters the singleton Audit actor. See [Actor Architecture](actor-architecture.md). |
+| Dedicated persistent-file ownership | Implemented | Main owns the event log, Schema owns `schemas_v1.json`, Handler owns `handlers_v1.json`, Audit owns the global journal, each Index actor owns one manifest/generation set, and each State actor owns one state file. |
 | Replicable index reads | Implemented | One Index actor per logical identity publishes write-once generations consumed by stateless Index Replica and Index Orchestrator actors. |
 | Caller authentication and authorization | Implemented | External OIDC/JWTs, generated API keys, exact/wildcard gRPC permissions, handler resource scopes, non-escalating key delegation, bootstrap/recovery, and anonymous liveness/readiness probes. |
-| Audit, observability, backup/restore | Not implemented | There is no audit sink, production metrics/tracing setup, backup, or restore facility. |
+| Durable audit and OpenTelemetry observability | Implemented | Mutations, decision outcomes, and denials use a hash-chained journal; protected paginated reads and conditional OTLP logs/traces/metrics are available. |
+| Backup/restore | Not implemented | No coordinated backup or restore facility exists for event, catalog, security, derived, and audit files. |
 
 ## Core Invariants
 
@@ -103,7 +104,7 @@ The supported profile is:
 
 The implementation does not support `$ref`, composition, unions, enum/const, string/number constraints, defaults, formats, nested key paths, or general JSON Schema validation. Registered command schemas validate command object shape. Registered event schemas validate emitted/appended payloads and require supplied keys to equal schema-derived keys.
 
-Replacement compatibility rejects removal of old required/key properties, type changes, key-name changes, and newly required properties unless `allow_incompatible` is true. Removal is allowed and persisted history is unchanged. Overrides are not audited in the current implementation.
+Replacement compatibility rejects removal of old required/key properties, type changes, key-name changes, and newly required properties unless `allow_incompatible` is true. Removal is allowed and persisted history is unchanged. Registration attempts and their created, replaced, unchanged, incompatible, or invalid outcomes are audited without schema documents.
 
 The actor implementation retains this runtime replacement check. It uses independently actor-owned `schemas_v1.json` and `handlers_v1.json` and does not read or migrate the pre-refactor `catalog_v1.json` format.
 
@@ -127,7 +128,7 @@ State files and indexes are not authoritative. A state file accelerates writer r
 
 ## Public Surface
 
-The implemented public protocol has Database, Catalog, Command, Event, Statement, Administration, and Authentication services with 34 RPCs in total. CommandService has four methods: `ExecuteHandler`, `PrepareDecision`, `CompleteDecision`, and `GetEventsByCommandId`; AuthenticationService creates, lists, and revokes generated API keys. All seven services support native HTTP/2 gRPC and gRPC-Web. `NativeDcbClient` and the native CLI wrap every RPC, and the standalone Blazor WebAssembly console exposes the full 34-RPC surface without a BFF. Server integration covers a full SDK flow, remote decisions, browser-style gRPC-Web calls, real JWT/API-key validation, and fine-grained authorization, while process-level end-to-end coverage launches a real server against temporary storage. Committed event reads expose only committed events; remote preparation additionally returns hydrated model JSON and an opaque signed capability. Domain rejection and invalid command execution are command response outcomes; routing, lifecycle, authentication, authorization, data-loss, and infrastructure failures use gRPC status codes with protobuf `ErrorDetail` in the `native-dcb-error-bin` binary trailer. See [gRPC API](grpc-api.md) and [CLI](cli.md).
+The implemented public protocol has Database, Catalog, Command, Event, Statement, Administration, Authentication, and Audit services with 35 RPCs in total. CommandService has four methods; AuthenticationService manages generated API keys, and AuditService exposes protected paginated journal reads. All eight services support native HTTP/2 gRPC and gRPC-Web. `NativeDcbClient` and the native CLI wrap every RPC, and the standalone Blazor WebAssembly console exposes the full 35-RPC surface without a BFF. Server integration covers a full SDK flow, remote decisions, browser-style gRPC-Web calls, real JWT/API-key validation, fine-grained authorization, and audit corruption/restart behavior, while process-level coverage launches and restarts a real server against temporary storage. Committed event reads expose only committed events; remote preparation additionally returns hydrated model JSON and an opaque signed capability. Domain rejection and invalid command execution are command response outcomes; routing, lifecycle, authentication, authorization, data-loss, audit, and infrastructure failures use gRPC status codes with protobuf `ErrorDetail` in the `native-dcb-error-bin` binary trailer. See [gRPC API](grpc-api.md) and [CLI](cli.md).
 
 The browser endpoint and OIDC authority/client/scopes in `NativeDCB.Web/wwwroot/appsettings.json` are public configuration. `GrpcWeb:AllowedOrigins` controls which origins browsers permit to read cross-origin responses, but CORS does not authenticate callers or authorize operations. No credentials, API keys, or client secrets belong in Web static assets.
 
@@ -144,7 +145,7 @@ The original design still identifies useful future work, but it must not be assu
 - define and test explicit synchronization guarantees for snapshot reads that overlap in-process writer activation/recovery
 - define production durability guarantees per filesystem
 - add size/backpressure limits for records, batches, requests, and full-event indexes
-- add audit records, metrics/tracing, backup/restore, repair tooling, and operational restart policy
+- add audit retention/archival, coordinated backup/restore, repair tooling, and operational restart policy
 - define schema evolution/upcasting and compatibility/version policy
 - support multi-silo topology only with a safe shared-storage coordination design
 
@@ -155,5 +156,6 @@ The original design still identifies useful future work, but it must not be assu
 - [Database Lifecycle](database-lifecycle.md)
 - [NativeDCB gRPC API](grpc-api.md)
 - [Authentication and authorization](authentication-authorization.md)
+- [Observability and audit](observability-audit.md)
 - [NativeDCB Decision Language](dsl.md)
 - [NativeDCB .NET SDK](dotnet-sdk.md)

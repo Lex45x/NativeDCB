@@ -1,5 +1,6 @@
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Messages;
+using NativeDCB.Actors.Observability;
 
 namespace NativeDCB.Actors.Grains;
 
@@ -14,6 +15,7 @@ public sealed class EventSubscriptionGrain(IGrainFactory grains) : Grain, IEvent
     private long _cursor;
     private int _delivered;
     private bool _closed;
+    private bool _meterActive;
 
     public async Task OpenAsync(
         EventSubscriptionOpenMessage request,
@@ -44,6 +46,9 @@ public sealed class EventSubscriptionGrain(IGrainFactory grains) : Grain, IEvent
 
         _configuration = request;
         _cursor = request.AfterEventId;
+        _meterActive = true;
+        ActorTelemetry.ActiveSubscriptions.Add(1,
+            new KeyValuePair<string, object?>("kind", Kind(request.Kind)));
     }
 
     public async Task<EventSubscriptionReadResultMessage> ReadNextAsync(
@@ -80,6 +85,12 @@ public sealed class EventSubscriptionGrain(IGrainFactory grains) : Grain, IEvent
                     .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
             if (result.Events.Length > 0 || result.Completed)
             {
+                if (result.Events.Length > 0)
+                {
+                    ActorTelemetry.SubscriptionEvents.Add(result.Events.Length,
+                        new KeyValuePair<string, object?>("kind", Kind(configuration.Kind)));
+                }
+
                 return result;
             }
 
@@ -96,8 +107,15 @@ public sealed class EventSubscriptionGrain(IGrainFactory grains) : Grain, IEvent
     {
         cancellationToken.CancellationToken.ThrowIfCancellationRequested();
         _closed = true;
+        StopMeter();
         DeactivateOnIdle();
         return Task.CompletedTask;
+    }
+
+    public override Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
+    {
+        StopMeter();
+        return base.OnDeactivateAsync(reason, cancellationToken);
     }
 
     private async Task<EventSubscriptionReadResultMessage> ReadRangeAsync(
@@ -166,5 +184,22 @@ public sealed class EventSubscriptionGrain(IGrainFactory grains) : Grain, IEvent
         _delivered += events.Length;
         bool completed = limit is not null && _delivered >= limit.Value;
         return new EventSubscriptionReadResultMessage(observedHead, events, completed);
+    }
+
+    private void StopMeter()
+    {
+        if (!_meterActive || _configuration is null)
+        {
+            return;
+        }
+
+        _meterActive = false;
+        ActorTelemetry.ActiveSubscriptions.Add(-1,
+            new KeyValuePair<string, object?>("kind", Kind(_configuration.Kind)));
+    }
+
+    private static string Kind(EventSubscriptionKind kind)
+    {
+        return kind == EventSubscriptionKind.Range ? "range" : "query";
     }
 }

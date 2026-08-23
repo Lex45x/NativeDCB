@@ -1,6 +1,6 @@
 # NativeDCB CLI
 
-Status: implemented 34-RPC native gRPC client reference
+Status: implemented 35-RPC native gRPC client reference
 Last verified: 2026-08-22
 
 ## Build And Run
@@ -20,7 +20,7 @@ dotnet run --project src\NativeDCB.Cli -- database list
 
 The built executable is named `nativedcb` (`nativedcb.exe` on Windows). Examples below use `dotnet run` so they do not depend on an installation or `PATH` entry.
 
-The CLI is a native gRPC client and covers all 34 RPCs in `nativedcb.v1`. Start `NativeDCB.Server` first. Its native HTTP/2 launch endpoint is `http://localhost:5010`; gRPC-Web is for browser clients and is not needed by the CLI.
+The CLI is a native gRPC client and covers all 35 RPCs in `nativedcb.v1`. Start `NativeDCB.Server` first. Its native HTTP/2 launch endpoint is `http://localhost:5010`; gRPC-Web is for browser clients and is not needed by the CLI.
 
 ## Server Selection
 
@@ -142,6 +142,16 @@ NDL uses `--ndl TEXT`, `--ndl-file PATH`, or `--ndl-stdin`.
 | `auth revoke-api-key` | `--key-id ID` |
 
 `create-api-key` returns the generated credential only in its creation response; listing and revocation return metadata without the secret. The server rejects grants that exceed the caller's own permissions. Store the returned key in an appropriate secret store and remove redirected response files after use.
+
+### AuditService (1)
+
+| Command | Inputs |
+|---|---|
+| `audit list` | Optional `--after SEQUENCE --limit N --database NAME --operation NAME --phase NAME --outcome NAME --authentication-scheme NAME --subject NAME` |
+
+`--after` is an exclusive non-negative audit sequence and defaults to `0`. Omitting `--limit` sends `0`, selecting the server default of 100; an explicit limit must be between 1 and 1000. Every filter is an exact match. The command writes one `ListAuditRecordsResponse` protobuf JSON object and does not automatically drain later pages. Pass the response's `nextAfterSequence` to a subsequent `--after` invocation when `hasMore` is true.
+
+The caller needs `grpc:nativedcb.v1.AuditService:ListAuditRecords` and either `audit:<encoded-database>:read` for an exact `--database` filter or `audit:*:read` when the filter is omitted.
 
 ## Input Conventions
 

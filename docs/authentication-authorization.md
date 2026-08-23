@@ -5,7 +5,7 @@ Last verified: 2026-08-22
 
 ## Overview
 
-NativeDCB authenticates callers with OIDC/OAuth 2.0 JWT access tokens or internally generated API keys. All 34 gRPC actions require action permissions, and handler operations additionally require database-and-handler permissions. Only `GET /health/live` and `GET /health/ready` are anonymous. `GrpcWeb:AllowedOrigins` remains a browser CORS policy, not an authentication boundary. The remote-decision `model_signature` remains an HMAC-protected decision capability, not caller authentication.
+NativeDCB authenticates callers with OIDC/OAuth 2.0 JWT access tokens or internally generated API keys. All 35 gRPC actions require action permissions; handler and audit operations additionally require resource permissions. Only `GET /health/live` and `GET /health/ready` are anonymous. `GrpcWeb:AllowedOrigins` remains a browser CORS policy, not an authentication boundary. The remote-decision `model_signature` remains an HMAC-protected decision capability, not caller authentication.
 
 API-key authentication is the secure default. An empty store creates one random bootstrap key with `*:*:*` and keeps readiness false until the first normal key is created.
 
@@ -19,12 +19,13 @@ The implementation:
 - add database-and-handler permissions to every handler operation
 - keep only the HTTP liveness and readiness probes anonymous
 - deny access before invoking an Orleans grain or mutating durable state
+- durably audit unauthenticated and unauthorized gRPC calls without replacing their security status
 - preserve native gRPC and gRPC-Web support
 - avoid placing access tokens or client secrets in static browser configuration, command-line arguments, logs, or error details
 
 NativeDCB validates external access tokens and issues its own API keys for service clients. It does not issue JWTs, manage users, store passwords, implement an OAuth authorization server, or translate roles into permissions.
 
-Audit records, tenant isolation, token revocation, and persisted handler provenance are separate requirements.
+[Durable audit records and OpenTelemetry observability](observability-audit.md) are implemented. Tenant isolation, external JWT revocation, and persisted handler provenance remain separate requirements.
 
 ## Connection And Call Semantics
 
@@ -62,6 +63,8 @@ Each call presents exactly one credential scheme. JWT and API-key identities are
 JWT validation requires a trusted signature, expected issuer, expected audience, unexpired lifetime, and HTTPS authority metadata. Inbound credentials must be protected by HTTPS or an equivalently trusted encrypted ingress. If TLS terminates at a reverse proxy, forwarded-header trust must be configured narrowly for that proxy.
 
 Permissions are read from standard space-delimited `scope` and `scp` claims. Claim type mapping is disabled so configured claim names remain stable. Permission comparison is ordinal.
+
+Audited JWT mutations and decisions require a non-empty `sub` claim. Their canonical audit identity is the validated authentication scheme, issuer, and subject; display names, email addresses, and arbitrary claims are not used as audit identity.
 
 ### Internally Generated API Keys
 
@@ -156,6 +159,10 @@ handler:*/*:*
 
 The gRPC action permission and the handler permission are both required. A handler permission does not grant access to its RPC, and a gRPC permission does not grant access to a handler.
 
+### Audit Resources
+
+Audit queries require their gRPC action permission plus `audit:<encoded-database>:read` for an exact database filter. Omitting the database filter requires `audit:*:read`, because the result can include global security and authorization records. Database encoding and wildcard matching follow the same complete-component rules as other resources; a caller with one database grant cannot omit the filter.
+
 ## gRPC Action Permissions
 
 Every method derives its required permission from its canonical protobuf service and method names. This avoids a second, manually named action vocabulary.
@@ -196,8 +203,9 @@ Every method derives its required permission from its canonical protobuf service
 | AuthenticationService | `CreateApiKey` | `grpc:nativedcb.v1.AuthenticationService:CreateApiKey` |
 | AuthenticationService | `ListApiKeys` | `grpc:nativedcb.v1.AuthenticationService:ListApiKeys` |
 | AuthenticationService | `RevokeApiKey` | `grpc:nativedcb.v1.AuthenticationService:RevokeApiKey` |
+| AuditService | `ListAuditRecords` | `grpc:nativedcb.v1.AuditService:ListAuditRecords` |
 
-The table includes all 34 implemented actions. There are no anonymous gRPC actions. `GetHealth` and `GetCapabilities` are protected like every other RPC. The HTTP `GET /health/live` and `GET /health/ready` probes remain anonymous and intentionally expose only minimal process/readiness state. The root HTTP endpoint requires an authenticated caller through the server fallback policy.
+The table includes all 35 implemented actions. There are no anonymous gRPC actions. `GetHealth` and `GetCapabilities` are protected like every other RPC. The HTTP `GET /health/live` and `GET /health/ready` probes remain anonymous and intentionally expose only minimal process/readiness state. The root HTTP endpoint requires an authenticated caller through the server fallback policy.
 
 ## Handler Permission Matrix
 
@@ -231,9 +239,10 @@ Authorization runs before the gRPC service invokes any grain:
 2. The exact gRPC permission is checked.
 3. Request routing values needed for a handler resource are validated and normalized.
 4. Any required handler permission is checked.
-5. The service method and its grain calls are allowed to execute.
+5. Audited mutations and decisions durably record a sanitized attempt.
+6. The service method and its grain calls are allowed to execute.
 
-Missing or invalid credentials return gRPC `UNAUTHENTICATED`. A valid identity without a required permission returns `PERMISSION_DENIED`. Invalid request data retains its existing status after the caller has enough permission to reach that validation. A caller without a handler grant is denied before handler lookup, preventing handler-existence probing.
+Missing or invalid credentials return gRPC `UNAUTHENTICATED`. A valid identity without a required permission returns `PERMISSION_DENIED`. Both are durably recorded when the audit sink is available; an audit failure is logged but does not replace the security result. Invalid request data retains its existing status after the caller has enough permission to reach that validation. A caller without a handler grant is denied before handler lookup, preventing handler-existence probing.
 
 The authorization interceptor implements unary, server-streaming, client-streaming, and duplex interception. Unknown future RPCs still require their derived gRPC permission. Descriptor-based Web coverage ensures new RPCs cannot silently disappear from the client surface.
 
@@ -277,7 +286,7 @@ Existing benchmark measurements run with explicit disabled authentication so tok
 
 Tests cover:
 
-- all 34 protobuf methods are present in the client surface and require derived gRPC permissions
+- all 35 protobuf methods are present in the client surface and require derived gRPC permissions
 - only the two HTTP probes allow anonymous access
 - missing, malformed, expired, wrong-issuer, and wrong-audience tokens return `UNAUTHENTICATED`
 - exact permissions and wildcards match only the documented segments
@@ -302,6 +311,7 @@ Tests cover:
 - API-key listing never returns a digest or secret, and revocation is effective for the next RPC
 - concurrent creation/revocation preserves a valid atomic catalog and exclusive-writer behavior
 - SDK, CLI, Web, and sample credential handling does not disclose credentials
+- JWT audited operations require `sub`, denials are durable, and audit resource grants isolate databases
 
 Most authorization combinations can use a test authentication scheme in `NativeDCB.Server.IntegrationTests`. At least one test must exercise real JWT validation and the API-key suite must exercise the real key store and authenticator. Process-level tests must explicitly select their authentication providers rather than relying on an implicit anonymous default.
 

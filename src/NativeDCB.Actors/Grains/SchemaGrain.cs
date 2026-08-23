@@ -1,5 +1,6 @@
 using System.Text.Json;
 
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Catalog;
 using NativeDCB.Actors.Catalog.Schemas;
 using NativeDCB.Actors.Contracts;
@@ -9,7 +10,7 @@ using NativeDCB.Actors.Storage;
 namespace NativeDCB.Actors.Grains;
 
 // ReSharper disable once UnusedType.Global -- Orleans activates grains by interface at runtime.
-public sealed class SchemaGrain(ActorStoragePath storage) : Grain, ISchemaGrain
+public sealed class SchemaGrain(ActorStoragePath storage, IGrainFactory grains) : Grain, ISchemaGrain
 {
     private const string FileName = "schemas_v1.json";
     private SchemaCatalogDocument _document = new();
@@ -45,6 +46,43 @@ public sealed class SchemaGrain(ActorStoragePath storage) : Grain, ISchemaGrain
     }
 
     public async Task<SchemaRegistrationResultMessage> RegisterAsync(
+        RegisterSchemaMessage request,
+        GrainCancellationToken cancellationToken)
+    {
+        uint beforeRevision = _document.Revision;
+        bool existed = request.Kind is ActorSchemaKind.Event or ActorSchemaKind.Command &&
+                       !string.IsNullOrWhiteSpace(request.Name) &&
+                       Schemas(request.Kind).ContainsKey(request.Name);
+        SchemaRegistrationResultMessage result;
+        try
+        {
+            result = await RegisterCoreAsync(request, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "cancelled", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+        catch (Exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "failed", "unexpected", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+
+        string outcome = !result.Registered
+            ? result.Diagnostics.Any(value => value.Code == "SCHEMA2001") ? "incompatible" : "invalid"
+            : _document.Revision == beforeRevision
+                ? "unchanged"
+                : existed ? "replaced" : "created";
+        await AuditRecorder.OutcomeAsync(grains, outcome, revision: _document.Revision)
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        return result;
+    }
+
+    private async Task<SchemaRegistrationResultMessage> RegisterCoreAsync(
         RegisterSchemaMessage request,
         GrainCancellationToken cancellationToken)
     {
@@ -115,6 +153,35 @@ public sealed class SchemaGrain(ActorStoragePath storage) : Grain, ISchemaGrain
     }
 
     public async Task<SchemaRemoveResultMessage?> RemoveAsync(
+        SchemaLookupMessage request,
+        GrainCancellationToken cancellationToken)
+    {
+        SchemaRemoveResultMessage? result;
+        try
+        {
+            result = await RemoveCoreAsync(request, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "cancelled", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+        catch (Exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "failed", "unexpected", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+
+        await AuditRecorder.OutcomeAsync(
+                grains, result is null ? "not_found" : "removed", revision: _document.Revision)
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        return result;
+    }
+
+    private async Task<SchemaRemoveResultMessage?> RemoveCoreAsync(
         SchemaLookupMessage request,
         GrainCancellationToken cancellationToken)
     {

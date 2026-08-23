@@ -86,6 +86,14 @@ internal static class PermissionEvaluator
         return new PermissionGrant("apikey", keyId == "*" ? "*" : Encode(keyId), action);
     }
 
+    public static PermissionGrant Audit(string database)
+    {
+        return new PermissionGrant(
+            "audit",
+            database == "*" ? "*" : Encode(ActorStoragePath.NormalizeDatabaseName(database)),
+            "read");
+    }
+
     private static string Encode(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
