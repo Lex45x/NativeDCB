@@ -16,6 +16,7 @@ public sealed class NativeDcbConsole : INativeDcbConsole
     private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
 
     private readonly AdministrationService.AdministrationServiceClient _administration;
+    private readonly AuditService.AuditServiceClient _audit;
     private readonly AuthenticationService.AuthenticationServiceClient _authentication;
     private readonly CatalogService.CatalogServiceClient _catalog;
     private readonly CommandService.CommandServiceClient _command;
@@ -33,6 +34,7 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         _statement = new StatementService.StatementServiceClient(channel);
         _administration = new AdministrationService.AdministrationServiceClient(channel);
         _authentication = new AuthenticationService.AuthenticationServiceClient(channel);
+        _audit = new AuditService.AuditServiceClient(channel);
     }
 
     public Task<string> ListDatabasesAsync(CancellationToken cancellationToken = default)
@@ -502,6 +504,60 @@ public sealed class NativeDcbConsole : INativeDcbConsole
         return UnaryAsync(_authentication.RevokeApiKeyAsync(
             new RevokeApiKeyRequest { KeyId = Required(keyId, nameof(keyId)) },
             cancellationToken: cancellationToken));
+    }
+
+    public Task<string> ListAuditRecordsAsync(
+        long afterSequence,
+        uint limit,
+        string database,
+        string operation,
+        string phase,
+        string outcome,
+        string authenticationScheme,
+        string subject,
+        CancellationToken cancellationToken = default)
+    {
+        if (limit > 1000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "The audit page limit cannot exceed 1000.");
+        }
+
+        ListAuditRecordsRequest request = new()
+        {
+            AfterSequence = NonNegative(afterSequence, nameof(afterSequence)),
+            Limit = limit
+        };
+        if (!string.IsNullOrWhiteSpace(database))
+        {
+            request.Database = database;
+        }
+
+        if (!string.IsNullOrWhiteSpace(operation))
+        {
+            request.Operation = operation;
+        }
+
+        if (!string.IsNullOrWhiteSpace(phase))
+        {
+            request.Phase = phase;
+        }
+
+        if (!string.IsNullOrWhiteSpace(outcome))
+        {
+            request.Outcome = outcome;
+        }
+
+        if (!string.IsNullOrWhiteSpace(authenticationScheme))
+        {
+            request.AuthenticationScheme = authenticationScheme;
+        }
+
+        if (!string.IsNullOrWhiteSpace(subject))
+        {
+            request.Subject = subject;
+        }
+
+        return UnaryAsync(_audit.ListAuditRecordsAsync(request, cancellationToken: cancellationToken));
     }
 
     private Task<string> RegisterSchemaAsync(

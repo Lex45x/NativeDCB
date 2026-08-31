@@ -1,7 +1,10 @@
+using System.Diagnostics;
 using System.Text.Json;
 
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Messages;
+using NativeDCB.Actors.Observability;
 using NativeDCB.Actors.Storage;
 using NativeDCB.Engine.Storage.Indexes;
 using NativeDCB.Model;
@@ -75,6 +78,41 @@ public sealed class IndexOrchestratorGrain(ActorStoragePath storage, IGrainFacto
         EventKeyMessage[] keys,
         GrainCancellationToken cancellationToken)
     {
+        long started = Stopwatch.GetTimestamp();
+        AdministrationOperationResultMessage result;
+        try
+        {
+            result = await RequestIndexRebuildCoreAsync(eventType, keys, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException)
+        {
+            RecordMaintenance("index_rebuild", "cancelled", started);
+            await AuditRecorder.OutcomeAsync(grains, "cancelled")
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+        catch (Exception)
+        {
+            RecordMaintenance("index_rebuild", "failed", started);
+            await AuditRecorder.OutcomeAsync(grains, "failed", "unexpected")
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+
+        string outcome = result.Error is null ? "completed" : "failed";
+        RecordMaintenance("index_rebuild", outcome, started);
+        await AuditRecorder.OutcomeAsync(
+                grains, outcome, result.Error?.Kind.ToString())
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        return result;
+    }
+
+    private async Task<AdministrationOperationResultMessage> RequestIndexRebuildCoreAsync(
+        string eventType,
+        EventKeyMessage[] keys,
+        GrainCancellationToken cancellationToken)
+    {
         string database = this.GetPrimaryKeyString();
         if (ValidateDatabase(database) is { } error)
         {
@@ -93,7 +131,21 @@ public sealed class IndexOrchestratorGrain(ActorStoragePath storage, IGrainFacto
         return new AdministrationOperationResultMessage();
     }
 
-    public async Task<IndexQueryResultMessage> ReadAuthoritativeAsync(
+    public Task<IndexQueryResultMessage> ReadAuthoritativeAsync(
+        EventQueryMessage query,
+        long afterEventIdExclusive,
+        long? throughEventIdInclusive,
+        int maxCount,
+        GrainCancellationToken cancellationToken)
+    {
+        return ObserveQueryAsync(
+            "authoritative",
+            "index_tail_or_scan",
+            () => ReadAuthoritativeCoreAsync(
+                query, afterEventIdExclusive, throughEventIdInclusive, maxCount, cancellationToken));
+    }
+
+    private async Task<IndexQueryResultMessage> ReadAuthoritativeCoreAsync(
         EventQueryMessage query,
         long afterEventIdExclusive,
         long? throughEventIdInclusive,
@@ -144,7 +196,21 @@ public sealed class IndexOrchestratorGrain(ActorStoragePath storage, IGrainFacto
                 .Take(maxCount));
     }
 
-    public async Task<IndexQueryResultMessage> ReadEventualAsync(
+    public Task<IndexQueryResultMessage> ReadEventualAsync(
+        EventQueryMessage query,
+        long afterEventIdExclusive,
+        long? throughEventIdInclusive,
+        int maxCount,
+        GrainCancellationToken cancellationToken)
+    {
+        return ObserveQueryAsync(
+            "eventual",
+            "index_or_scan",
+            () => ReadEventualCoreAsync(
+                query, afterEventIdExclusive, throughEventIdInclusive, maxCount, cancellationToken));
+    }
+
+    private async Task<IndexQueryResultMessage> ReadEventualCoreAsync(
         EventQueryMessage query,
         long afterEventIdExclusive,
         long? throughEventIdInclusive,
@@ -286,5 +352,71 @@ public sealed class IndexOrchestratorGrain(ActorStoragePath storage, IGrainFacto
                 .Select(group => group.First())
                 .OrderBy(value => value.EventId)
                 .ToArray());
+    }
+
+    private static void RecordMaintenance(string kind, string outcome, long started)
+    {
+        ActorTelemetry.MaintenanceOperations.Add(1,
+            new KeyValuePair<string, object?>("kind", kind),
+            new KeyValuePair<string, object?>("outcome", outcome));
+        ActorTelemetry.MaintenanceDuration.Record(
+            Stopwatch.GetElapsedTime(started).TotalSeconds,
+            new KeyValuePair<string, object?>("kind", kind),
+            new KeyValuePair<string, object?>("outcome", outcome));
+    }
+
+    private async Task<IndexQueryResultMessage> ObserveQueryAsync(
+        string consistency,
+        string strategy,
+        Func<Task<IndexQueryResultMessage>> query)
+    {
+        long started = Stopwatch.GetTimestamp();
+        // The explicit operation name is part of the telemetry contract.
+        // ReSharper disable once ExplicitCallerInfoArgument
+        using Activity? activity = ActorTelemetry.Activities.StartActivity("query");
+        activity?.SetTag("db.namespace", this.GetPrimaryKeyString());
+        activity?.SetTag("nativedcb.query.consistency", consistency);
+        activity?.SetTag("nativedcb.query.strategy", strategy);
+        try
+        {
+            IndexQueryResultMessage result = await query()
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            RecordQuery(consistency, strategy, "success", result.Events.Length, started, activity);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            RecordQuery(consistency, strategy, "cancelled", 0, started, activity);
+            throw;
+        }
+        catch (Exception)
+        {
+            RecordQuery(consistency, strategy, "failed", 0, started, activity);
+            throw;
+        }
+    }
+
+    private static void RecordQuery(
+        string consistency,
+        string strategy,
+        string outcome,
+        int eventCount,
+        long started,
+        Activity? activity)
+    {
+        ActorTelemetry.Queries.Add(1,
+            new KeyValuePair<string, object?>("consistency", consistency),
+            new KeyValuePair<string, object?>("strategy", strategy),
+            new KeyValuePair<string, object?>("outcome", outcome));
+        ActorTelemetry.QueryDuration.Record(
+            Stopwatch.GetElapsedTime(started).TotalSeconds,
+            new KeyValuePair<string, object?>("consistency", consistency),
+            new KeyValuePair<string, object?>("strategy", strategy));
+        ActorTelemetry.QueryEvents.Record(eventCount,
+            new KeyValuePair<string, object?>("strategy", strategy),
+            new KeyValuePair<string, object?>("role", "returned"));
+        activity?.SetTag("nativedcb.query.outcome", outcome);
+        activity?.SetTag("nativedcb.query.events", eventCount);
+        activity?.SetStatus(outcome is "failed" or "cancelled" ? ActivityStatusCode.Error : ActivityStatusCode.Ok);
     }
 }

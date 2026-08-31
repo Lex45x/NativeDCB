@@ -1,5 +1,6 @@
 using Grpc.Core;
 
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Messages;
 using NativeDCB.Protocol.V1;
@@ -56,16 +57,28 @@ public sealed class AdministrationGrpcService(IGrainFactory grains)
         RequestIndexRebuildRequest request,
         ServerCallContext context)
     {
-        if (string.IsNullOrWhiteSpace(request.EventType) || request.Keys.Count == 0)
+        EventKeyMessage[] keys;
+        try
         {
-            throw ProtocolMapper.InvalidArgument("An event type and at least one key are required.");
+            if (string.IsNullOrWhiteSpace(request.EventType) || request.Keys.Count == 0)
+            {
+                throw ProtocolMapper.InvalidArgument("An event type and at least one key are required.");
+            }
+
+            ValidateDatabase(request.Database);
+            keys = request.Keys
+                .Select(ProtocolMapper.ToEventKey)
+                .Select(key => new EventKeyMessage(key.Name, key.Value))
+                .Distinct()
+                .ToArray();
+        }
+        catch (RpcException exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "invalid", exception.StatusCode.ToString())
+                .ConfigureAwait(false);
+            throw;
         }
 
-        EventKeyMessage[] keys = request.Keys
-            .Select(ProtocolMapper.ToEventKey)
-            .Select(key => new EventKeyMessage(key.Name, key.Value))
-            .Distinct()
-            .ToArray();
         IIndexOrchestratorGrain orchestrator = IndexOrchestrator(request.Database);
         AdministrationOperationResultMessage result = await GrainCall.RunAsync(
                 token => orchestrator.RequestIndexRebuildAsync(request.EventType, keys, token),
@@ -83,7 +96,18 @@ public sealed class AdministrationGrpcService(IGrainFactory grains)
         RequestStateRebuildRequest request,
         ServerCallContext context)
     {
-        ValidateRebuildPartitionNumber(request.PartitionNumber);
+        try
+        {
+            ValidateRebuildPartitionNumber(request.PartitionNumber);
+            ValidateDatabase(request.Database);
+        }
+        catch (RpcException exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "invalid", exception.StatusCode.ToString())
+                .ConfigureAwait(false);
+            throw;
+        }
+
         IStateOrchestratorGrain orchestrator = StateOrchestrator(request.Database);
         AdministrationOperationResultMessage result = await GrainCall.RunAsync(
                 token => orchestrator.RequestStateRebuildAsync(request.PartitionNumber, token), context.CancellationToken)

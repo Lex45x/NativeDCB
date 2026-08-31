@@ -1,5 +1,7 @@
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Messages;
+using NativeDCB.Actors.Observability;
 using NativeDCB.Actors.Storage;
 using NativeDCB.Engine.Storage.EventLog;
 
@@ -38,6 +40,47 @@ public sealed class DatabaseDirectoryGrain(ActorStoragePath storage, IGrainFacto
     }
 
     public async Task<CreateDatabaseActorResponse> CreateAsync(
+        CreateDatabaseActorRequest request,
+        GrainCancellationToken cancellationToken)
+    {
+        CreateDatabaseActorResponse result;
+        try
+        {
+            result = await CreateCoreAsync(request, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "cancelled")
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+        catch (Exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "failed", "unexpected")
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+
+        string outcome = result.Database is not null ? "created" : result.Error?.Kind switch
+        {
+            DatabaseDirectoryErrorKind.AlreadyExists => "already_exists",
+            DatabaseDirectoryErrorKind.InvalidArgument => "invalid",
+            _ => "failed"
+        };
+        if (result.Database is not null)
+        {
+            ActorTelemetry.DatabaseTransitions.Add(1,
+                new KeyValuePair<string, object?>("from_state", "absent"),
+                new KeyValuePair<string, object?>("to_state", "online"));
+        }
+
+        await AuditRecorder.OutcomeAsync(grains, outcome, result.Error?.Kind.ToString())
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        return result;
+    }
+
+    private async Task<CreateDatabaseActorResponse> CreateCoreAsync(
         CreateDatabaseActorRequest request,
         GrainCancellationToken cancellationToken)
     {

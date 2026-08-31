@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Catalog;
 using NativeDCB.Actors.Catalog.Schemas;
 using NativeDCB.Actors.Contracts;
@@ -8,6 +10,7 @@ using NativeDCB.Actors.Decisions.Execution;
 using NativeDCB.Actors.Decisions.Remote;
 using NativeDCB.Actors.Mapping;
 using NativeDCB.Actors.Messages;
+using NativeDCB.Actors.Observability;
 using NativeDCB.Actors.Storage;
 using NativeDCB.Engine.Storage.EventLog;
 using NativeDCB.Model.Decisions;
@@ -25,6 +28,38 @@ public sealed class DecisionGrain(
     private readonly NdlDecisionRuntime _runtime = new();
 
     public async Task<ExecuteDecisionResultMessage> ExecuteAsync(
+        ExecuteDecisionMessage request,
+        GrainCancellationToken cancellationToken)
+    {
+        long started = Stopwatch.GetTimestamp();
+        using Activity? activity = StartDecisionActivity("execute", request.Database, request.HandlerName,
+            request.CommandId);
+        try
+        {
+            ExecuteDecisionResultMessage result = await ExecuteCoreAsync(request, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            string outcome = AuditOutcome(result.Outcome);
+            RecordDecision("execute", outcome, started, activity);
+            await AuditRecorder.OutcomeAsync(
+                    grains,
+                    outcome,
+                    result.Code,
+                    result.CommandId.ToString("D"),
+                    result.Events.Length == 0 ? null : result.Events[0].EventId,
+                    result.Events.Length == 0 ? null : result.Events[^1].EventId)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            RecordDecision("execute", "cancelled", started, activity);
+            await AuditRecorder.OutcomeAsync(grains, "cancelled", commandId: request.CommandId.ToString("D"))
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+    }
+
+    private async Task<ExecuteDecisionResultMessage> ExecuteCoreAsync(
         ExecuteDecisionMessage request,
         GrainCancellationToken cancellationToken)
     {
@@ -109,6 +144,38 @@ public sealed class DecisionGrain(
     }
 
     public async Task<PrepareDecisionResultMessage> PrepareAsync(
+        PrepareDecisionMessage request,
+        GrainCancellationToken cancellationToken)
+    {
+        long started = Stopwatch.GetTimestamp();
+        using Activity? activity = StartDecisionActivity("prepare", request.Database, request.HandlerName,
+            request.CommandId);
+        try
+        {
+            PrepareDecisionResultMessage result = await PrepareCoreAsync(request, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            string outcome = AuditOutcome(result.Outcome);
+            RecordDecision("prepare", outcome, started, activity);
+            await AuditRecorder.OutcomeAsync(
+                    grains,
+                    outcome,
+                    result.Code,
+                    result.CommandId.ToString("D"),
+                    result.Events.Length == 0 ? null : result.Events[0].EventId,
+                    result.Events.Length == 0 ? null : result.Events[^1].EventId)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            RecordDecision("prepare", "cancelled", started, activity);
+            await AuditRecorder.OutcomeAsync(grains, "cancelled", commandId: request.CommandId.ToString("D"))
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+    }
+
+    private async Task<PrepareDecisionResultMessage> PrepareCoreAsync(
         PrepareDecisionMessage request,
         GrainCancellationToken cancellationToken)
     {
@@ -216,6 +283,39 @@ public sealed class DecisionGrain(
     }
 
     public async Task<CompleteDecisionResultMessage> CompleteAsync(
+        CompleteDecisionMessage request,
+        GrainCancellationToken cancellationToken)
+    {
+        long started = Stopwatch.GetTimestamp();
+        using Activity? activity = StartDecisionActivity(
+            "complete", request.Claims.Database, request.Claims.HandlerName, request.Claims.CommandId);
+        try
+        {
+            CompleteDecisionResultMessage result = await CompleteCoreAsync(request, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            string outcome = AuditOutcome(result.Outcome);
+            RecordDecision("complete", outcome, started, activity);
+            await AuditRecorder.OutcomeAsync(
+                    grains,
+                    outcome,
+                    result.Code,
+                    result.CommandId.ToString("D"),
+                    result.Events.Length == 0 ? null : result.Events[0].EventId,
+                    result.Events.Length == 0 ? null : result.Events[^1].EventId)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            RecordDecision("complete", "cancelled", started, activity);
+            await AuditRecorder.OutcomeAsync(
+                    grains, "cancelled", commandId: request.Claims.CommandId.ToString("D"))
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+    }
+
+    private async Task<CompleteDecisionResultMessage> CompleteCoreAsync(
         CompleteDecisionMessage request,
         GrainCancellationToken cancellationToken)
     {
@@ -356,6 +456,64 @@ public sealed class DecisionGrain(
 
     private IReadGrain Reader(string database) => grains.GetGrain<IReadGrain>(database);
     private ISchemaGrain Schemas(string database) => grains.GetGrain<ISchemaGrain>(database);
+
+    private static Activity? StartDecisionActivity(
+        string operation,
+        string database,
+        string handler,
+        Guid commandId)
+    {
+        Activity? activity = ActorTelemetry.Activities.StartActivity($"decision.{operation}");
+        activity?.SetTag("decision.operation", operation);
+        activity?.SetTag("db.namespace", database);
+        activity?.SetTag("nativedcb.handler", handler);
+        activity?.SetTag("nativedcb.command_id", commandId.ToString("D"));
+        return activity;
+    }
+
+    private static void RecordDecision(
+        string operation,
+        string outcome,
+        long started,
+        Activity? activity)
+    {
+        ActorTelemetry.Decisions.Add(1,
+            new KeyValuePair<string, object?>("operation", operation),
+            new KeyValuePair<string, object?>("outcome", outcome));
+        ActorTelemetry.DecisionDuration.Record(
+            Stopwatch.GetElapsedTime(started).TotalSeconds,
+            new KeyValuePair<string, object?>("operation", operation),
+            new KeyValuePair<string, object?>("outcome", outcome));
+        activity?.SetTag("decision.outcome", outcome);
+        activity?.SetStatus(outcome is "failed" or "cancelled" ? ActivityStatusCode.Error : ActivityStatusCode.Ok);
+    }
+
+    private static string AuditOutcome(ExecuteDecisionOutcome outcome)
+    {
+        return outcome switch
+        {
+            ExecuteDecisionOutcome.AlreadyCommitted => "already_committed",
+            _ => outcome.ToString().ToLowerInvariant()
+        };
+    }
+
+    private static string AuditOutcome(PrepareDecisionOutcome outcome)
+    {
+        return outcome switch
+        {
+            PrepareDecisionOutcome.AlreadyCommitted => "already_committed",
+            _ => outcome.ToString().ToLowerInvariant()
+        };
+    }
+
+    private static string AuditOutcome(CompleteDecisionOutcome outcome)
+    {
+        return outcome switch
+        {
+            CompleteDecisionOutcome.AlreadyCommitted => "already_committed",
+            _ => outcome.ToString().ToLowerInvariant()
+        };
+    }
 
     private async Task<HandlerDescriptionMessage?> GetHandlerAsync(
         string database,

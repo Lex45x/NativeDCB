@@ -79,6 +79,30 @@ public sealed partial class NativeDcbServerTests
                         "grpc:nativedcb.v1.DatabaseService:GetCapabilities")
                 ]))));
         Assert.Equal(StatusCode.PermissionDenied, internalClaimDenied.StatusCode);
+
+        RpcException missingSubject = await Assert.ThrowsAsync<RpcException>(async () =>
+            await databases.CreateDatabaseAsync(
+                new CreateDatabaseRequest { Database = "missing-sub" },
+                BearerHeaders(Token("grpc:nativedcb.v1.DatabaseService:CreateDatabase"))));
+        Assert.Equal(StatusCode.PermissionDenied, missingSubject.StatusCode);
+
+        AuditService.AuditServiceClient audit = new(channel);
+        ListAuditRecordsResponse denials = await audit.ListAuditRecordsAsync(
+            new ListAuditRecordsRequest
+            {
+                Operation = "/nativedcb.v1.DatabaseService/CreateDatabase",
+                Phase = "denied",
+                Limit = 100
+            },
+            BearerHeaders(Token(
+            [
+                new Claim("sub", "audit-reader"),
+                new Claim("scope", "grpc:nativedcb.v1.AuditService:ListAuditRecords audit:*:read")
+            ])));
+        AuditRecord denial = Assert.Single(denials.Records);
+        Assert.Equal("JwtBearer", denial.AuthenticationScheme);
+        Assert.False(denial.HasSubject);
+        Assert.Equal("missing-sub", denial.Database);
     }
 
     [Fact]
@@ -272,6 +296,19 @@ public sealed partial class NativeDcbServerTests
         RevokeApiKeyResponse revoked = await authentication.RevokeApiKeyAsync(
             new RevokeApiKeyRequest { KeyId = reader.Key.KeyId }, Headers(admin.ApiKey));
         Assert.NotNull(revoked.Key.RevokedUtc);
+        RevokeApiKeyResponse alreadyRevoked = await authentication.RevokeApiKeyAsync(
+            new RevokeApiKeyRequest { KeyId = reader.Key.KeyId }, Headers(admin.ApiKey));
+        Assert.Equal(revoked.Key.RevokedUtc, alreadyRevoked.Key.RevokedUtc);
+
+        ListAuditRecordsResponse revocations = await new AuditService.AuditServiceClient(channel)
+            .ListAuditRecordsAsync(new ListAuditRecordsRequest
+            {
+                Operation = "/nativedcb.v1.AuthenticationService/RevokeApiKey",
+                Phase = "outcome",
+                Limit = 100
+            }, Headers(admin.ApiKey));
+        Assert.Equal(["revoked", "already_revoked"], revocations.Records.Select(value => value.Outcome));
+
         RpcException revokedReader = await Assert.ThrowsAsync<RpcException>(async () =>
             await databases.GetCapabilitiesAsync(new GetCapabilitiesRequest(), Headers(reader.ApiKey)));
         Assert.Equal(StatusCode.Unauthenticated, revokedReader.StatusCode);
@@ -296,6 +333,168 @@ public sealed partial class NativeDcbServerTests
 
         HttpResponseMessage readiness = await http.GetAsync("/health/ready");
         Assert.True(readiness.IsSuccessStatusCode);
+    }
+
+    [Fact]
+    public async Task Audit_journal_records_authoritative_outcomes_and_survives_restart()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "NativeDCB.Server.AuditTests", Guid.NewGuid().ToString("N"));
+        long boundary;
+        await using (ServerFactory factory = new(root))
+        {
+            factory.PreserveDatabaseRoot = true;
+            using GrpcChannel channel = GrpcChannel.ForAddress(
+                "http://localhost",
+                new GrpcChannelOptions { HttpHandler = factory.Server.CreateHandler() });
+            DatabaseService.DatabaseServiceClient databases = new(channel);
+            AuditService.AuditServiceClient audit = new(channel);
+
+            Assert.Throws<IOException>(() => new FileStream(
+                Path.Combine(root, ".audit", "audit.lock"),
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None));
+
+            await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "school" });
+            ListAuditRecordsResponse records = await audit.ListAuditRecordsAsync(new ListAuditRecordsRequest
+            {
+                Database = "school",
+                Limit = 100
+            });
+
+            Assert.Collection(records.Records,
+                attempt =>
+                {
+                    Assert.Equal("attempt", attempt.Phase);
+                    Assert.Equal("authentication-disabled", attempt.Subject);
+                    Assert.Equal("school", attempt.Database);
+                },
+                outcome =>
+                {
+                    Assert.Equal("outcome", outcome.Phase);
+                    Assert.Equal("created", outcome.Outcome);
+                    Assert.Equal("school", outcome.Database);
+                });
+            Assert.Equal(records.Records[0].OperationId, records.Records[1].OperationId);
+            boundary = records.BoundarySequence;
+
+            RpcException invalidLimit = await Assert.ThrowsAsync<RpcException>(async () =>
+                await audit.ListAuditRecordsAsync(new ListAuditRecordsRequest { Limit = uint.MaxValue }));
+            Assert.Equal(StatusCode.InvalidArgument, invalidLimit.StatusCode);
+        }
+
+        await using (ServerFactory restarted = new(root))
+        {
+            using GrpcChannel channel = GrpcChannel.ForAddress(
+                "http://localhost",
+                new GrpcChannelOptions { HttpHandler = restarted.Server.CreateHandler() });
+            DatabaseService.DatabaseServiceClient databases = new(channel);
+            AuditService.AuditServiceClient audit = new(channel);
+            await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "other" });
+            ListAuditRecordsResponse records = await audit.ListAuditRecordsAsync(
+                new ListAuditRecordsRequest { AfterSequence = boundary, Database = "other", Limit = 100 });
+            Assert.Equal(expected: 2, records.Records.Count);
+            Assert.All(records.Records, record => Assert.True(record.Sequence > boundary));
+        }
+    }
+
+    [Fact]
+    public async Task Audit_queries_enforce_database_scope_and_denials_do_not_expose_credentials()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "NativeDCB.Server.AuditTests", Guid.NewGuid().ToString("N"));
+        CreatedApiKey bootstrap = await CreateBootstrapAsync(root);
+        await using ServerFactory factory = new(root, authenticationDisabled: false);
+        using GrpcChannel channel = GrpcChannel.ForAddress(
+            "http://localhost",
+            new GrpcChannelOptions { HttpHandler = factory.Server.CreateHandler() });
+        DatabaseService.DatabaseServiceClient databases = new(channel);
+        AuthenticationService.AuthenticationServiceClient authentication = new(channel);
+        AuditService.AuditServiceClient audit = new(channel);
+
+        await databases.CreateDatabaseAsync(
+            new CreateDatabaseRequest { Database = "school" }, Headers(bootstrap.Credential));
+        CreateApiKeyRequest createAdmin = new() { Label = "administrator" };
+        createAdmin.Permissions.Add("*:*:*");
+        CreateApiKeyResponse admin = await authentication.CreateApiKeyAsync(
+            createAdmin, Headers(bootstrap.Credential));
+        CreateApiKeyRequest create = new() { Label = "school-auditor" };
+        create.Permissions.Add("grpc:nativedcb.v1.AuditService:ListAuditRecords");
+        create.Permissions.Add("audit:school:read");
+        CreateApiKeyResponse reader = await authentication.CreateApiKeyAsync(create, Headers(admin.ApiKey));
+
+        RpcException unauthenticated = await Assert.ThrowsAsync<RpcException>(async () =>
+            await databases.ListDatabasesAsync(new ListDatabasesRequest()));
+        Assert.Equal(StatusCode.Unauthenticated, unauthenticated.StatusCode);
+
+        ListAuditRecordsResponse school = await audit.ListAuditRecordsAsync(
+            new ListAuditRecordsRequest { Database = "school", Limit = 100 }, Headers(reader.ApiKey));
+        Assert.NotEmpty(school.Records);
+        Assert.All(school.Records, record => Assert.Equal("school", record.Database));
+
+        RpcException denied = await Assert.ThrowsAsync<RpcException>(async () =>
+            await audit.ListAuditRecordsAsync(new ListAuditRecordsRequest { Limit = 100 }, Headers(reader.ApiKey)));
+        Assert.Equal(StatusCode.PermissionDenied, denied.StatusCode);
+
+        ListAuditRecordsResponse global = await audit.ListAuditRecordsAsync(
+            new ListAuditRecordsRequest
+            {
+                Phase = "denied",
+                Subject = reader.Key.KeyId,
+                Limit = 100
+            }, Headers(admin.ApiKey));
+        AuditRecord denial = Assert.Single(global.Records);
+        Assert.Equal("permission_denied", denial.Outcome);
+        Assert.DoesNotContain(bootstrap.Credential, denial.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(reader.ApiKey, denial.ToString(), StringComparison.Ordinal);
+
+        ListAuditRecordsResponse unauthenticatedRecords = await audit.ListAuditRecordsAsync(
+            new ListAuditRecordsRequest
+            {
+                Operation = "/nativedcb.v1.DatabaseService/ListDatabases",
+                Phase = "denied",
+                Limit = 100
+            }, Headers(admin.ApiKey));
+        AuditRecord unauthenticatedRecord = Assert.Single(unauthenticatedRecords.Records);
+        Assert.Equal("unauthenticated", unauthenticatedRecord.Outcome);
+        Assert.False(unauthenticatedRecord.HasSubject);
+
+        string journal = string.Join('\n', await Task.WhenAll(
+            Directory.GetFiles(Path.Combine(root, ".audit"), "audit_partition_*_v1.ndjson")
+                .Select(path => File.ReadAllTextAsync(path))));
+        Assert.DoesNotContain(bootstrap.Credential, journal, StringComparison.Ordinal);
+        Assert.DoesNotContain(reader.ApiKey, journal, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Audit_corruption_fails_readiness_and_blocks_mutations_before_actor_invocation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "NativeDCB.Server.AuditTests", Guid.NewGuid().ToString("N"));
+        await using ServerFactory factory = new(root);
+        using GrpcChannel channel = GrpcChannel.ForAddress(
+            "http://localhost",
+            new GrpcChannelOptions { HttpHandler = factory.Server.CreateHandler() });
+        DatabaseService.DatabaseServiceClient databases = new(channel);
+        AuditService.AuditServiceClient audit = new(channel);
+
+        await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "school" });
+        string partition = Assert.Single(Directory.GetFiles(
+            Path.Combine(root, ".audit"), "audit_partition_*_v1.ndjson"));
+        string content = await File.ReadAllTextAsync(partition);
+        await File.WriteAllTextAsync(
+            partition, content.Replace("school", "tampered", StringComparison.Ordinal));
+
+        RpcException corrupt = await Assert.ThrowsAsync<RpcException>(async () =>
+            await audit.ListAuditRecordsAsync(new ListAuditRecordsRequest { Limit = 100 }));
+        Assert.Equal(StatusCode.DataLoss, corrupt.StatusCode);
+
+        RpcException blocked = await Assert.ThrowsAsync<RpcException>(async () =>
+            await databases.CreateDatabaseAsync(new CreateDatabaseRequest { Database = "blocked" }));
+        Assert.Equal(StatusCode.Unavailable, blocked.StatusCode);
+        Assert.False(Directory.Exists(Path.Combine(root, "blocked")));
+
+        using HttpClient http = factory.CreateClient();
+        HttpResponseMessage readiness = await http.GetAsync("/health/ready");
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, readiness.StatusCode);
     }
 
     [Theory]

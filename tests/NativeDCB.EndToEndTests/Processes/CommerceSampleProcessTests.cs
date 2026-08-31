@@ -390,6 +390,35 @@ public sealed class CommerceSampleProcessTests
                 Keys(published[index: 7]));
             AssertEquivalent(published, persisted);
             Assert.Equal(expected: 8L, (await client.GetHeadAsync(database, timeout.Token)).EventId);
+
+            AuditService.AuditServiceClient audit = new(channel);
+            ListAuditRecordsResponse beforeRestart = await audit.ListAuditRecordsAsync(
+                new ListAuditRecordsRequest { Database = database, Limit = 1000 },
+                cancellationToken: timeout.Token);
+            Assert.NotEmpty(beforeRestart.Records);
+            Assert.Contains(beforeRestart.Records, record =>
+                record.Operation == "/nativedcb.v1.CommandService/CompleteDecision" &&
+                record.Phase == "outcome" &&
+                record.Outcome == "committed");
+
+            await StopServerAsync(server);
+            server = null;
+            server = StartServer(
+                serverAssembly,
+                serverDirectory,
+                address,
+                databaseRoot,
+                ports[1],
+                ports[2],
+                output);
+            await WaitUntilReadyAsync(databases, server, output, timeout.Token);
+
+            ListAuditRecordsResponse afterRestart = await audit.ListAuditRecordsAsync(
+                new ListAuditRecordsRequest { Database = database, Limit = 1000 },
+                cancellationToken: timeout.Token);
+            Assert.Equal(
+                beforeRestart.Records.Select(record => (record.Sequence, record.RecordHash)),
+                afterRestart.Records.Select(record => (record.Sequence, record.RecordHash)));
         }
         finally
         {
@@ -420,6 +449,7 @@ public sealed class CommerceSampleProcessTests
         startInfo.Environment["ASPNETCORE_ENVIRONMENT"] = "Testing";
         startInfo.Environment["DOTNET_ENVIRONMENT"] = "Testing";
         startInfo.Environment["Authentication__Providers"] = "Disabled";
+        startInfo.Environment["OTEL_SDK_DISABLED"] = "true";
         startInfo.Environment["DatabaseRoot"] = databaseRoot;
         startInfo.Environment["Orleans__SiloPort"] = siloPort.ToString();
         startInfo.Environment["Orleans__GatewayPort"] = gatewayPort.ToString();

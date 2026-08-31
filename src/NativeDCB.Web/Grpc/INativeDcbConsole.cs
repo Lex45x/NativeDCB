@@ -85,4 +85,8 @@ public interface INativeDcbConsole
 
     Task<string> ListApiKeysAsync(CancellationToken cancellationToken = default);
     Task<string> RevokeApiKeyAsync(string keyId, CancellationToken cancellationToken = default);
+
+    Task<string> ListAuditRecordsAsync(long afterSequence, uint limit, string database, string operation,
+        string phase, string outcome, string authenticationScheme, string subject,
+        CancellationToken cancellationToken = default);
 }

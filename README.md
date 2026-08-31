@@ -1,8 +1,8 @@
 # NativeDCB
 
-NativeDCB is an experimental .NET 10 Dynamic Consistency Boundaries event store. It combines an Orleans actor application layer in `NativeDCB.Actors`, a single-writer decision runtime, a durable JSON/NDJSON event log, a versioned gRPC and gRPC-Web API, NDL and fluent C# decision authoring, optional two-step remote decisions, a native CLI, and a standalone Blazor WebAssembly operator console. The 31 database RPCs route database work through actors; three authentication RPCs manage server-generated API keys.
+NativeDCB is an experimental .NET 10 Dynamic Consistency Boundaries event store. It combines an Orleans actor application layer in `NativeDCB.Actors`, a single-writer decision runtime, a durable JSON/NDJSON event log, a versioned gRPC and gRPC-Web API, NDL and fluent C# decision authoring, optional two-step remote decisions, a native CLI, and a standalone Blazor WebAssembly operator console. The 31 database RPCs route database work through actors; three authentication RPCs manage server-generated API keys, and one audit RPC reads the server-wide journal.
 
-The implementation is usable but not production complete. Writer startup can recover from a validated cumulative state checkpoint and replay only later partitions, with authoritative full-log recovery when no checkpoint is valid. Decision-model hydration combines derived index snapshots with an authoritative committed tail. The server authenticates OIDC/JWT or generated API-key callers and enforces per-RPC and per-handler permissions, but remains single-silo and has no audit or backup facilities. See [Requirements](docs/requirements.md) for an honest status matrix.
+The implementation is usable but not production complete. Writer startup can recover from a validated cumulative state checkpoint and replay only later partitions, with authoritative full-log recovery when no checkpoint is valid. Decision-model hydration combines derived index snapshots with an authoritative committed tail. The server authenticates OIDC/JWT or generated API-key callers, enforces scoped permissions, writes a hash-chained durable audit journal, and exports OpenTelemetry through OTLP. It remains single-silo and has no backup/restore facility. See [Requirements](docs/requirements.md) for an honest status matrix.
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ dotnet build NativeDCB.slnx --no-restore
 dotnet test NativeDCB.slnx --no-build
 ```
 
-The solution includes NDL, engine, SDK, analyzer/generator, server integration, process-level end-to-end, and authoring-equivalence tests. Coverage includes a full SDK flow across all seven protocol services, real JWT/API-key authorization, and browser-style gRPC-Web unary and server-streaming integration.
+The solution includes NDL, engine, SDK, analyzer/generator, server integration, process-level end-to-end, and authoring-equivalence tests. Coverage includes a full SDK flow across all eight protocol services, real JWT/API-key authorization, durable audit restart/corruption checks, and browser-style gRPC-Web unary and server-streaming integration.
 
 ## Run
 
@@ -49,7 +49,7 @@ In another shell, create the database with the repository CLI:
 dotnet run --project src\NativeDCB.Cli -- --server https://localhost:7154 database create --database quickstart
 ```
 
-The CLI covers all 34 RPCs and adds JWT/API-key credentials to each call. See the [CLI reference](docs/cli.md) for authentication, schemas, NDL statements, commands, remote decision preparation/completion, reads, subscriptions, input conventions, and exit codes.
+The CLI covers all 35 RPCs and adds JWT/API-key credentials to each call. See the [CLI reference](docs/cli.md) for authentication, audit queries, schemas, NDL statements, commands, remote decision preparation/completion, reads, subscriptions, input conventions, and exit codes.
 
 Start the standalone WebAssembly console with its `https` profile:
 
@@ -57,7 +57,7 @@ Start the standalone WebAssembly console with its `https` profile:
 dotnet run --project src\NativeDCB.Web --launch-profile https
 ```
 
-Open `https://localhost:7229`. The browser loads a standalone Blazor WebAssembly application and calls `https://localhost:7154` directly with authenticated gRPC-Web; there is no Web backend-for-frontend. Configure its public OIDC authority/client/scopes in `src/NativeDCB.Web/wwwroot/appsettings.json`. The workbench provides explicit controls for all 34 RPCs, incremental streaming and cancellation, and a prominent NDL editor shared by validation, explanation, and execution. Service navigation, method counts, and wrapper coverage are derived from protobuf descriptors.
+Open `https://localhost:7229`. The browser loads a standalone Blazor WebAssembly application and calls `https://localhost:7154` directly with authenticated gRPC-Web; there is no Web backend-for-frontend. Configure its public OIDC authority/client/scopes in `src/NativeDCB.Web/wwwroot/appsettings.json`. The workbench provides explicit controls for all 35 RPCs, including paginated audit reads, incremental streaming and cancellation, and a prominent NDL editor shared by validation, explanation, and execution. Service navigation, method counts, and wrapper coverage are derived from protobuf descriptors.
 
 The browser endpoint and public OIDC client settings are configured in static content at `src/NativeDCB.Web/wwwroot/appsettings.json`; never put credentials, API keys, or client secrets there. Cross-origin browser calls are allowed only from origins in the server's `GrpcWeb:AllowedOrigins` configuration, which defaults to the two local Web launch origins. CORS remains independent of authentication and authorization.
 
@@ -93,6 +93,7 @@ dotnet run -c Release --project benchmarks\NativeDCB.SystemBenchmarks -- --list-
 - [Requirements and implementation status](docs/requirements.md)
 - [Implemented actor architecture and persistence ownership](docs/actor-architecture.md)
 - [OIDC/JWT, generated API-key, and scoped authorization](docs/authentication-authorization.md)
+- [Durable audit logging and OpenTelemetry observability](docs/observability-audit.md)
 - [Implemented Native Commerce domain and workload model](docs/commerce-domain.md)
 - [Implemented benchmark suite, methodology, scenarios, metrics, and reporting](docs/benchmarking.md)
 - [Solution structure, projects, tests, and sample](docs/solution-structure.md)

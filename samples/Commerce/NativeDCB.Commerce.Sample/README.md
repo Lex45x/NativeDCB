@@ -46,4 +46,4 @@ Preparation hydrates `PaymentPreparationModel`, but does not call a payment gate
 
 ## Recovery Scope
 
-The client sample cannot safely restart the server process that it is connected to. `recovery` demonstrates the client-visible replay and reconciliation contract against a running server. Durable stop/start recovery is covered by server integration tests. The Commerce process E2E test, `NativeDCB.EndToEndTests.Processes.CommerceSampleProcessTests`, owns a real server lifecycle and temporary storage while verifying sample seeding and the NDL, SDK, and remote publication paths.
+The client sample cannot safely restart the server process that it is connected to. `recovery` demonstrates the client-visible replay and reconciliation contract against a running server. Durable stop/start recovery is covered by server integration tests. The Commerce process E2E test, `NativeDCB.EndToEndTests.Processes.CommerceSampleProcessTests`, owns a real server lifecycle and temporary storage while verifying sample seeding, NDL/SDK/remote publication, and audit sequence/hash continuity across a real server restart.

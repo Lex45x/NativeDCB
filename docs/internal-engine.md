@@ -1,9 +1,9 @@
 # NativeDCB Internal Engine
 
 Status: current implementation reference  
-Last verified: 2026-08-19
+Last verified: 2026-08-22
 
-NativeDCB runs one Orleans localhost silo. `NativeDCB.Actors` owns application orchestration and file mutation; `NativeDCB.Engine` contains Orleans-free event-log, index, and state storage primitives. All public database operations enter actors before reaching Engine storage.
+NativeDCB runs one Orleans localhost silo. `NativeDCB.Actors` owns application orchestration and file mutation; `NativeDCB.Engine` contains Orleans-free audit-journal, event-log, index, and state storage primitives. All public database operations enter actors before reaching Engine storage.
 
 ## Correctness Model
 
@@ -41,6 +41,10 @@ The stateless `IRemoteDecisionRouterGrain` verifies an HMAC capability before ex
 `ISchemaGrain` and `IHandlerGrain` are each keyed by database and own `schemas_v1.json` and `handlers_v1.json`, respectively. Their ordinary in-memory documents are serialized by Orleans turns. Mutations write a uniquely named temporary file with write-through/durable flush and atomically move it over the owned file.
 
 Schema maintains command/event registrations, versions, fingerprints, compatibility checks, and consistency-key metadata. Handler asks Schema for immutable snapshots when validating NDL or plans, stores compiled plans and fingerprints, and atomically publishes multi-decision statements in one handler-file replacement.
+
+### Audit
+
+A process-lifetime `AuditJournal` singleton exclusively opens `{DatabaseRoot}/.audit` during hosted-service startup. The singleton `IAuditGrain` is the normal-runtime append/query path over that journal; it appends durably flushed records to numbered NDJSON partitions, validates the global sequence and cross-partition SHA-256 chain, serves bounded snapshots, and exposes readiness status. The offline bootstrap-recovery command uses the same Orleans-free journal only while the server is stopped.
 
 ### Read
 
@@ -87,6 +91,15 @@ Each `IEventSubscriptionGrain` has a unique ID and retains only an in-memory cur
       generation_00000000000000000042_{unique}_v1.json
 ```
 
+The database root separately contains the authoritative operational journal:
+
+```text
+{DatabaseRoot}/.audit/
+  audit.lock
+  audit_v1.json
+  audit_partition_000001_v1.ndjson
+```
+
 The current logical-index directory is `index_{eventHash16}_{keyHash16}`. The generation head is 20 decimal digits and the unique component is a GUID without separators. The pre-refactor `catalog_v1.json` and mutable root `index_*.json` formats are unsupported historical development formats; there is no migration or fallback.
 
 ## Partition Identity And NDJSON
@@ -106,6 +119,12 @@ Recovery requires the header's store UUID, format, and number to match database 
 ```
 
 Records use camel-case `System.Text.Json`, UTF-8, and one JSON value followed by `\n`. Event IDs in a batch are consecutive. Recovery exposes a batch only after a matching commit record and validates metadata, counts, IDs, keys, command identity, and ordering.
+
+## Audit Journal
+
+Audit metadata binds a store UUID, schema, creation time, and rollover limit. Each audit partition header binds the same store UUID, its one-based number, and the preceding partition's final record hash. Records carry a positive global sequence, operation UUID, phase/category/operation, sanitized identity/routing metadata, optional outcome correlation, previous hash, and record hash. The canonical hash input excludes only the `record_hash` being computed.
+
+`Audit:MaxRecordCountPerPartition` defaults to 10,000. Appends use write-through, asynchronous flush, and `Flush(true)` before acknowledgement. Recovery validates every committed line and can truncate only an incomplete final line in the active partition. The journal has no retention, compaction, encryption, external signing, or multi-writer protocol.
 
 ## Append And Rollover
 
@@ -148,4 +167,5 @@ Indexes are derived snapshots and can be stale after a recorded advancement faul
 - Subscriptions poll and are not durable across actor/process failure.
 - Prepared remote decisions are stateless bearer capabilities with no continuation store, revocation list, caller binding, or automatic completion retry.
 - There are no record/batch/file size limits, compaction, retention, backups, or repair commands for authoritative partitions.
+- The audit journal has no retention, archival, external signature, backup, or repair policy.
 - The design is not safe for multiple silos sharing one filesystem except that `store.lock` rejects a second writer process.

@@ -1,5 +1,6 @@
 using System.Text.Json;
 
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Catalog;
 using NativeDCB.Actors.Catalog.Schemas;
 using NativeDCB.Actors.Contracts;
@@ -53,6 +54,41 @@ public sealed class HandlerGrain(
     }
 
     public async Task<HandlerRegistrationResultMessage> RegisterAsync(
+        RegisterHandlerMessage request,
+        GrainCancellationToken cancellationToken)
+    {
+        uint beforeRevision = _document.Revision;
+        bool existed = _document.Handlers.ContainsKey(request.Name);
+        HandlerRegistrationResultMessage result;
+        try
+        {
+            result = await RegisterCoreAsync(request, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "cancelled", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+        catch (Exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "failed", "unexpected", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+
+        string outcome = !result.Handler.Valid
+            ? "invalid"
+            : _document.Revision == beforeRevision
+                ? "unchanged"
+                : existed ? "replaced" : "created";
+        await AuditRecorder.OutcomeAsync(grains, outcome, revision: _document.Revision)
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        return result;
+    }
+
+    private async Task<HandlerRegistrationResultMessage> RegisterCoreAsync(
         RegisterHandlerMessage request,
         GrainCancellationToken cancellationToken)
     {
@@ -131,6 +167,14 @@ public sealed class HandlerGrain(
         }
 
         string planFingerprint = CatalogJson.Fingerprint(planJson);
+        if (_document.Handlers.TryGetValue(request.Name, out HandlerCatalogEntry? previous) &&
+            string.Equals(previous.CommandType, request.CommandType, StringComparison.Ordinal) &&
+            string.Equals(previous.PlanFingerprint, planFingerprint, StringComparison.Ordinal))
+        {
+            return new HandlerRegistrationResultMessage(ToDescription(
+                previous, includePlanJson: false, generatedNdl: null, generationDiagnostics: []));
+        }
+
         uint revision = checked(_document.Revision + 1);
         HandlerCatalogEntry entry = new(
             request.Name,
@@ -151,6 +195,35 @@ public sealed class HandlerGrain(
     }
 
     public async Task<HandlerRemoveResultMessage?> RemoveAsync(
+        string name,
+        GrainCancellationToken cancellationToken)
+    {
+        HandlerRemoveResultMessage? result;
+        try
+        {
+            result = await RemoveCoreAsync(name, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "cancelled", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+        catch (Exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "failed", "unexpected", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+
+        await AuditRecorder.OutcomeAsync(
+                grains, result is null ? "not_found" : "removed", revision: _document.Revision)
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        return result;
+    }
+
+    private async Task<HandlerRemoveResultMessage?> RemoveCoreAsync(
         string name,
         GrainCancellationToken cancellationToken)
     {
@@ -267,6 +340,35 @@ public sealed class HandlerGrain(
     }
 
     public async Task<PublishStatementResultMessage> PublishStatementAsync(
+        PublishStatementMessage request,
+        GrainCancellationToken cancellationToken)
+    {
+        PublishStatementResultMessage result;
+        try
+        {
+            result = await PublishStatementCoreAsync(request, cancellationToken)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+        catch (OperationCanceledException)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "cancelled", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+        catch (Exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "failed", "unexpected", revision: _document.Revision)
+                .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            throw;
+        }
+
+        await AuditRecorder.OutcomeAsync(
+                grains, result.Valid ? "published" : "rejected", revision: _document.Revision)
+            .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        return result;
+    }
+
+    private async Task<PublishStatementResultMessage> PublishStatementCoreAsync(
         PublishStatementMessage request,
         GrainCancellationToken cancellationToken)
     {

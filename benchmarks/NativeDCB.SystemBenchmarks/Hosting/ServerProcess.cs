@@ -69,6 +69,7 @@ internal sealed class ServerProcess : IAsyncDisposable
             start.Environment["ASPNETCORE_ENVIRONMENT"] = "Testing";
             start.Environment["DOTNET_ENVIRONMENT"] = "Testing";
             start.Environment["Authentication__Providers"] = "Disabled";
+            start.Environment["OTEL_SDK_DISABLED"] = "true";
             start.Environment["DatabaseRoot"] = DatabaseRoot;
             start.Environment["MaxEventCountPerPartition"] = _options.PartitionLimit.ToString();
             start.Environment["Orleans__SiloPort"] = SiloPort.ToString();

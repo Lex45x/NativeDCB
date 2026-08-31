@@ -18,3 +18,5 @@ internal sealed record ApiKeyRecord(
     bool Bootstrap);
 
 internal sealed record CreatedApiKey(string Credential, ApiKeyRecord Record);
+
+internal sealed record ApiKeyRevocation(ApiKeyRecord Record, bool AlreadyRevoked);

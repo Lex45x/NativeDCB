@@ -149,7 +149,7 @@ The server converts spans to one-based line/column plus zero-based absolute offs
 - There is no user-defined function, collection/index access, loop, recursion, read statement, schema statement, command statement, or administration grammar.
 - Arrays cannot be written as NDL literals, though command/event JSON may contain arrays.
 - Schema-aware compile analysis exists only in server validation and is intentionally shallow.
-- `allow_incompatible` on handler/statement registration has no implemented handler compatibility behavior or audit trail.
+- `allow_incompatible` on handler/statement registration has no separate handler compatibility behavior; registration attempts/outcomes are audited without source or plan bodies.
 - The Web workbench provides a plain NDL source editor for validation, explanation, and execution, but there is no syntax-aware editor service, LSP integration, or generated C# output.
 
 The fuller language features previously described in design documents remain future behavior, not current guarantees.

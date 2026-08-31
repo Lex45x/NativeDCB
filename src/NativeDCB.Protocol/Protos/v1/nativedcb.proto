@@ -68,6 +68,11 @@ service AuthenticationService {
   rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
 }
 
+// AuditService reads the globally ordered durable audit journal.
+service AuditService {
+  rpc ListAuditRecords(ListAuditRecordsRequest) returns (ListAuditRecordsResponse);
+}
+
 message KeyValue {
   string key = 1;
   string value = 2;
@@ -690,4 +695,47 @@ message ApiKeyInfo {
   google.protobuf.Timestamp expires_utc = 5;
   google.protobuf.Timestamp revoked_utc = 6;
   bool bootstrap = 7;
+}
+
+message ListAuditRecordsRequest {
+  int64 after_sequence = 1;
+  uint32 limit = 2;
+  optional string database = 3;
+  optional string operation = 4;
+  optional string phase = 5;
+  optional string outcome = 6;
+  optional string authentication_scheme = 7;
+  optional string subject = 8;
+}
+
+message ListAuditRecordsResponse {
+  repeated AuditRecord records = 1;
+  int64 next_after_sequence = 2;
+  bool has_more = 3;
+  int64 boundary_sequence = 4;
+}
+
+message AuditRecord {
+  string schema = 1;
+  int64 sequence = 2;
+  google.protobuf.Timestamp timestamp_utc = 3;
+  string operation_id = 4;
+  string phase = 5;
+  string category = 6;
+  string operation = 7;
+  optional string authentication_scheme = 8;
+  optional string subject = 9;
+  optional string issuer = 10;
+  optional string database = 11;
+  optional string resource = 12;
+  optional string outcome = 13;
+  optional string code = 14;
+  optional string grpc_status = 15;
+  optional string trace_id = 16;
+  optional string command_id = 17;
+  optional int64 first_event_id = 18;
+  optional int64 last_event_id = 19;
+  optional int64 revision = 20;
+  string previous_hash = 21;
+  string record_hash = 22;
 }

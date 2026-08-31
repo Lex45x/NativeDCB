@@ -42,6 +42,7 @@ The gRPC implementations use `NativeDCB.Actors.Contracts`, `NativeDCB.Actors.Mes
 | `SchemaGrain` | database | Sole mutator of `schemas_v1.json`; command/event registrations, fingerprints, versions, compatibility, payload validation data, and key metadata |
 | `HandlerGrain` | database | Sole mutator of `handlers_v1.json`; NDL/plan validation, compilation, fingerprints, versions, and statement publication |
 | `DecisionGrain` | database plus command ID | Local execution, remote preparation/completion, authoritative model hydration, evaluation, and local conflict retry |
+| `AuditGrain` | singleton | Sole normal-runtime writer and protected reader of the server-wide partitioned audit journal |
 | `RemoteDecisionRouterGrain` | stateless worker | Capability verification and routing of completion to the command-keyed Decision actor |
 | `IndexGrain` | encoded logical index identity | Sole mutator of one index manifest and its write-once generation files |
 | `IndexReplicaGrain` | encoded logical index identity, stateless worker | Read-only loading of the published manifest and referenced immutable generation |
@@ -55,7 +56,7 @@ Actor names describe roles rather than public services. There is no DatabaseServ
 
 ## Transport Boundary
 
-All 31 database-operation RPCs cross the actor boundary. The three `AuthenticationService` RPCs manage the server-owned API-key catalog and do not enter database actors.
+All 31 database-operation RPCs cross the actor boundary. The `AuditService` RPC enters the singleton Audit actor. The three `AuthenticationService` RPCs manage the server-owned API-key catalog and do not enter database actors, but their audited attempts and outcomes enter Audit.
 
 | Public RPC | Actor entry point |
 |---|---|
@@ -76,6 +77,7 @@ All 31 database-operation RPCs cross the actor boundary. The three `Authenticati
 | `ExecuteStatement`, `ExplainStatement` | Handler |
 | `ListPartitions`, `GetStateFileStatus`, `RequestStateRebuild` | State Orchestrator |
 | `ListIndexes`, `RequestIndexRebuild` | Index Orchestrator |
+| `ListAuditRecords` | Audit |
 
 Generating an omitted command UUID, validating transport-shaped arguments, and constructing an Orleans actor key remain transport concerns. Every one of the 31 database-operation RPC implementations then enters the responsible actor. Streaming gRPC methods loop over `EventSubscriptionGrain.ReadNextAsync`; cursor, filtering, limits, polling, and deduplication remain in that actor.
 
@@ -120,7 +122,7 @@ Schema and Handler actors expose immutable snapshots with monotonic revisions. C
 - Persisted events carry the captured event-schema version.
 - Schema replacement compatibility remains a runtime rule. Replacing a schema rejects removed required/key properties, type changes, key-name changes, and newly required properties unless `allow_incompatible` is explicitly set.
 
-Schema/handler history and audit records are not introduced. Revisions provide actor concurrency identity, not a public catalog-history API.
+Schema/handler history is not introduced. Revisions provide actor concurrency identity, not a public catalog-history API. Sanitized mutation attempts and outcomes are written separately to the server-wide audit journal without catalog source documents.
 
 ## Durable Directory
 
@@ -139,6 +141,15 @@ The current layout is:
     {logical-index-id}/
       manifest_v1.json
       generation_00000000000000000042_{unique}_v1.json
+```
+
+The database root also contains the singleton journal outside individual databases:
+
+```text
+{DatabaseRoot}/.audit/
+  audit.lock
+  audit_v1.json
+  audit_partition_000001_v1.ndjson
 ```
 
 The physical logical-index directory is currently `index_{eventHash16}_{keyHash16}`. Each generation filename contains a 20-digit head and a unique GUID component. Generation files are created once; `manifest_v1.json` is durably replaced to publish a generation. There is no `catalog_v1.json` or mutable root-level `index_*.json` compatibility path; pre-refactor development databases must be recreated.
@@ -188,9 +199,9 @@ There is no `DatabaseRegistry`, mutable `DatabaseEntry`, registry semaphore, cat
 
 ## Current Boundaries
 
-- All 31 database-operation gRPC methods route database work into actors; the three authentication methods remain server security operations.
+- All 31 database-operation gRPC methods route database work into actors; the audit method enters Audit, and the three authentication methods remain server security operations with audited attempts/outcomes.
 - Local and remote model construction occurs in command-keyed Decision actors through Index Orchestrator.
 - Finite reads and subscription polling contain no direct storage access in gRPC.
-- Schema, Handler, Main, Index, and State actors are the mutating paths for their respective files.
+- Schema, Handler, Main, Audit, Index, and State actors are the mutating paths for their respective files.
 - Stateless Read and Index Replica actors only consume authoritative partitions or published immutable generations.
 - The deployment remains one localhost silo; shared-filesystem multi-silo safety is not implemented.

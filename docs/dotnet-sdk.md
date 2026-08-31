@@ -148,7 +148,7 @@ await client.RegisterDecisionAsync("school", "SubscribeStudentSdk", definition);
 
 ## Client API
 
-`NativeDcbClient` wraps every RPC in the six-service protocol. Its address constructor owns a `GrpcChannel` and enables all services. A constructor accepting generated Database, Catalog, Command, Event, Statement, and Administration clients also enables all services for dependency-injection/testing scenarios. The legacy constructor accepting only Command, Event, and Catalog clients preserves the earlier surface; calling a newer Database, Statement, or Administration wrapper on such an instance throws `InvalidOperationException`.
+`NativeDcbClient` wraps every RPC in the eight-service protocol. Its address constructor owns a `GrpcChannel` and enables all services. The complete dependency-injection/testing constructor accepts generated Database, Catalog, Command, Event, Statement, Administration, Authentication, and Audit clients. Older six- and seven-service overloads remain available, as does the legacy Command/Event/Catalog constructor; calling a wrapper whose generated client was not supplied throws `InvalidOperationException`.
 
 The client provides:
 
@@ -158,6 +158,8 @@ The client provides:
 - Event: `ReadEventsByRangeAsync`, `ReadEventsByQueryAsync`, `ReadEventsByTypeAndKeysAsync`, and `SubscribeEventsAsync` as `IAsyncEnumerable<SequencedEvent>`
 - Statement: `ExecuteStatementAsync` as `IAsyncEnumerable<StatementResult>` and `ExplainStatementAsync`
 - Administration: `ListPartitionsAsync`, `ListIndexesAsync`, `GetStateFileStatusAsync`, `RequestIndexRebuildAsync`, and `RequestStateRebuildAsync`
+- Authentication: `CreateApiKeyAsync`, `ListApiKeysAsync`, and `RevokeApiKeyAsync`
+- Audit: `ListAuditRecordsAsync` with bounded cursor pagination and exact optional filters
 - public static request builders plus `MapQuery` and `MapEvent`
 
 ```csharp

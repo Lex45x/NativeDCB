@@ -3,6 +3,7 @@ using Google.Protobuf.WellKnownTypes;
 
 using Grpc.Core;
 
+using NativeDCB.Actors.Audit;
 using NativeDCB.Actors.Contracts;
 using NativeDCB.Actors.Mapping;
 using NativeDCB.Actors.Messages;
@@ -18,7 +19,8 @@ public sealed class CommandGrpcService(IGrainFactory grains) : CommandService.Co
         ExecuteHandlerRequest request,
         ServerCallContext context)
     {
-        Guid commandId = ParseCommandId(request.HasCommandId ? request.CommandId : null);
+        Guid commandId = await ParseAuditedCommandIdAsync(request.HasCommandId ? request.CommandId : null)
+            .ConfigureAwait(false);
         IDecisionGrain decision = Decision(request.Database, commandId);
         ExecuteDecisionResultMessage result = await CallAsync(
                 token => decision.ExecuteAsync(new ExecuteDecisionMessage(
@@ -36,7 +38,8 @@ public sealed class CommandGrpcService(IGrainFactory grains) : CommandService.Co
         PrepareDecisionRequest request,
         ServerCallContext context)
     {
-        Guid commandId = ParseCommandId(request.HasCommandId ? request.CommandId : null);
+        Guid commandId = await ParseAuditedCommandIdAsync(request.HasCommandId ? request.CommandId : null)
+            .ConfigureAwait(false);
         IDecisionGrain decision = Decision(request.Database, commandId);
         PrepareDecisionResultMessage result = await CallAsync(
                 token => decision.PrepareAsync(new PrepareDecisionMessage(
@@ -266,7 +269,21 @@ public sealed class CommandGrpcService(IGrainFactory grains) : CommandService.Co
 
         return Guid.TryParseExact(value, "D", out Guid commandId) && commandId != Guid.Empty
             ? commandId
-            : throw ProtocolMapper.InvalidArgument("command_id must be a canonical non-empty UUID.");
+             : throw ProtocolMapper.InvalidArgument("command_id must be a canonical non-empty UUID.");
+    }
+
+    private async Task<Guid> ParseAuditedCommandIdAsync(string? value)
+    {
+        try
+        {
+            return ParseCommandId(value);
+        }
+        catch (RpcException exception)
+        {
+            await AuditRecorder.OutcomeAsync(grains, "invalid", exception.StatusCode.ToString())
+                .ConfigureAwait(false);
+            throw;
+        }
     }
 
     private static async Task<T> CallAsync<T>(

@@ -24,6 +24,7 @@ namespace NativeDCB.Sdk.Client;
 public sealed class NativeDcbClient : IDisposable
 {
     private readonly AdministrationService.AdministrationServiceClient? _administrationClient;
+    private readonly AuditService.AuditServiceClient? _auditClient;
     private readonly AuthenticationService.AuthenticationServiceClient? _authenticationClient;
     private readonly CatalogService.CatalogServiceClient _catalogClient;
     private readonly CommandService.CommandServiceClient _commandClient;
@@ -69,6 +70,7 @@ public sealed class NativeDcbClient : IDisposable
         _statementClient = new StatementService.StatementServiceClient(_ownedChannel);
         _administrationClient = new AdministrationService.AdministrationServiceClient(_ownedChannel);
         _authenticationClient = new AuthenticationService.AuthenticationServiceClient(_ownedChannel);
+        _auditClient = new AuditService.AuditServiceClient(_ownedChannel);
         _jsonOptions = jsonOptions ?? JsonSerializerOptions.Default;
     }
 
@@ -101,6 +103,22 @@ public sealed class NativeDcbClient : IDisposable
             jsonOptions)
     {
         _authenticationClient = authenticationClient ?? throw new ArgumentNullException(nameof(authenticationClient));
+    }
+
+    public NativeDcbClient(
+        DatabaseService.DatabaseServiceClient databaseClient,
+        CatalogService.CatalogServiceClient catalogClient,
+        CommandService.CommandServiceClient commandClient,
+        EventService.EventServiceClient eventClient,
+        StatementService.StatementServiceClient statementClient,
+        AdministrationService.AdministrationServiceClient administrationClient,
+        AuthenticationService.AuthenticationServiceClient authenticationClient,
+        AuditService.AuditServiceClient auditClient,
+        JsonSerializerOptions? jsonOptions = null)
+        : this(databaseClient, catalogClient, commandClient, eventClient, statementClient, administrationClient,
+            authenticationClient, jsonOptions)
+    {
+        _auditClient = auditClient ?? throw new ArgumentNullException(nameof(auditClient));
     }
 
     public NativeDcbClient(
@@ -152,6 +170,23 @@ public sealed class NativeDcbClient : IDisposable
         ValidateRequired(keyId, nameof(keyId));
         return await Require(_authenticationClient, nameof(AuthenticationService)).RevokeApiKeyAsync(
             new RevokeApiKeyRequest { KeyId = keyId }, cancellationToken: cancellationToken);
+    }
+
+    public async Task<ListAuditRecordsResponse> ListAuditRecordsAsync(
+        long afterSequence = 0,
+        uint limit = 0,
+        string? database = null,
+        string? operation = null,
+        string? phase = null,
+        string? outcome = null,
+        string? authenticationScheme = null,
+        string? subject = null,
+        CancellationToken cancellationToken = default)
+    {
+        return await Require(_auditClient, nameof(AuditService)).ListAuditRecordsAsync(
+            BuildListAuditRecordsRequest(afterSequence, limit, database, operation, phase, outcome,
+                authenticationScheme, subject),
+            cancellationToken: cancellationToken);
     }
 
     public async Task<ListDatabasesResponse> ListDatabasesAsync(CancellationToken cancellationToken = default)
@@ -625,6 +660,56 @@ public sealed class NativeDcbClient : IDisposable
         if (commandId.HasValue)
         {
             request.CommandId = commandId.Value.ToString("D");
+        }
+
+        return request;
+    }
+
+    public static ListAuditRecordsRequest BuildListAuditRecordsRequest(
+        long afterSequence = 0,
+        uint limit = 0,
+        string? database = null,
+        string? operation = null,
+        string? phase = null,
+        string? outcome = null,
+        string? authenticationScheme = null,
+        string? subject = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(afterSequence);
+        if (limit > 1000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "The audit page limit cannot exceed 1000.");
+        }
+
+        ListAuditRecordsRequest request = new() { AfterSequence = afterSequence, Limit = limit };
+        if (database is not null)
+        {
+            request.Database = database;
+        }
+
+        if (operation is not null)
+        {
+            request.Operation = operation;
+        }
+
+        if (phase is not null)
+        {
+            request.Phase = phase;
+        }
+
+        if (outcome is not null)
+        {
+            request.Outcome = outcome;
+        }
+
+        if (authenticationScheme is not null)
+        {
+            request.AuthenticationScheme = authenticationScheme;
+        }
+
+        if (subject is not null)
+        {
+            request.Subject = subject;
         }
 
         return request;

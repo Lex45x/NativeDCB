@@ -142,7 +142,7 @@ A second process holding the same `store.lock` causes activation to fail with `U
 
 Schema and Handler actors independently load or create `schemas_v1.json` and `handlers_v1.json`. Each file contains current registrations plus a monotonic document revision. Mutations copy the current in-memory document, write an indented uniquely named `.tmp` file with write-through/durable flush, atomically move it over the owned file, then promote the replacement in memory.
 
-Schemas and handlers can be registered, replaced, and removed. No superseded versions, statement history, audit records, or caller identity are retained. Handler compilation obtains an immutable Schema snapshot. Multi-decision statement execution validates all decisions and replaces the handler file once; invalid input publishes none.
+Schemas and handlers can be registered, replaced, and removed. Their current-state files retain no superseded versions or statement history. The separate audit journal records sanitized caller identity and mutation outcomes without schema, plan, or NDL bodies. Handler compilation obtains an immutable Schema snapshot. Multi-decision statement execution validates all decisions and replaces the handler file once; invalid input publishes none.
 
 Schema replacement compatibility rejects removal of required/key properties, type changes, consistency-key-name changes, and newly required properties unless `allow_incompatible` is explicit.
 
@@ -198,15 +198,21 @@ Indexes can lag without changing writer readiness. Authoritative hydration uses 
 
 State generation failure does not change event authority or writer readiness. Main startup validates checkpoints directly through Engine recovery and falls back to full authoritative replay.
 
+## Audit Lifecycle
+
+The singleton Audit actor opens `{DatabaseRoot}/.audit`, acquires its exclusive lock, validates metadata, contiguous partitions, sequences, and the cross-partition hash chain, and repairs only a proven incomplete active suffix. Authorized public mutations and decisions append a durable attempt before entering their implementation; owning actors/components append semantic outcomes. Authorization denials append a separate `denied` record. A failed attempt append blocks the mutation with `UNAVAILABLE`; a faulted journal keeps readiness false and blocks later audited mutations.
+
+The journal rolls at `Audit:MaxRecordCountPerPartition`, has no retention policy, and is independent of each database event sequence. The protected Audit RPC reads stable bounded pages and does not provide a subscription.
+
 ## Health
 
-`GetHealth` and HTTP readiness enter Database Directory. It enumerates database directories and asks each Main actor for status:
+`GetHealth` enters Database Directory. HTTP readiness checks the audit actor and bootstrap state before enumerating databases and asking each Main actor for status:
 
 - `read_ready` means partition 1 exists
 - `write_ready` means Main is Ready with a non-faulted open store
 - state and last fault are returned separately
 
-This is filesystem-presence and actor-state health, not an active integrity probe. `/health/live` returns 200 while the app serves. `/health/ready` returns 200 when every enumerated Main is Ready or Discovered and no bootstrap API key remains active, otherwise 503. An empty database root is not ready while the bootstrap credential awaits replacement.
+Database health is filesystem-presence and actor-state health, not an active integrity probe. `/health/live` returns 200 while the app serves. `/health/ready` returns 200 when the audit journal is healthy, every enumerated Main is Ready or Discovered, and no bootstrap API key remains active; otherwise it returns 503. An empty database root is not ready while the bootstrap credential awaits replacement.
 
 ## Shutdown
 
@@ -220,4 +226,4 @@ There is no configurable drain deadline, subscription completion guarantee, or b
 - explicit repair/restart operations and consistent data-loss state transitions
 - transactional database creation across independently owned files
 - graceful drain deadlines and subscription/background-work coordination
-- audit, backup/restore, and safe multi-silo topology
+- audit retention/archival, backup/restore, and safe multi-silo topology
